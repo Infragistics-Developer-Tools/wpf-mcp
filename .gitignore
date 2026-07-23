@@ -1,5 +1,10 @@
 node_modules/
 dist/
 nuget/packages/
+nuget/obj/
+nuget/type-info.json
+scripts/type-extractor/bin/
+scripts/type-extractor/obj/
 *.log
 .env
+src/data/

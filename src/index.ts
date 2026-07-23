@@ -6,15 +6,16 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 import { TOOL_DESCRIPTIONS } from './tools/constants.js';
-import { listComponentsSchema, getApiReferenceSchema } from './tools/schemas.js';
-import { createListComponentsHandler, createGetApiReferenceHandler } from './tools/handlers.js';
-import type { ComponentEntry } from './lib/types.js';
+import { listComponentsSchema, getApiReferenceSchema, searchApiSchema } from './tools/schemas.js';
+import { createListComponentsHandler, createGetApiReferenceHandler, createSearchApiHandler } from './tools/handlers.js';
+import type { ComponentEntry, SearchIndexEntry } from './lib/types.js';
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const components: ComponentEntry[] = require('./data/namespaces.json');
+const searchIndex: SearchIndexEntry[] = require('./data/search-index.json');
 
 // ── Debug logging ─────────────────────────────────────────────────────────────
 
@@ -61,6 +62,16 @@ server.registerTool(
     inputSchema: getApiReferenceSchema,
   },
   createGetApiReferenceHandler(components, log)
+);
+
+server.registerTool(
+  'search_wpf_api',
+  {
+    description: TOOL_DESCRIPTIONS.search_wpf_api,
+    annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
+    inputSchema: searchApiSchema,
+  },
+  createSearchApiHandler(searchIndex, log)
 );
 
 // ── Transport ─────────────────────────────────────────────────────────────────

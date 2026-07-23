@@ -31,3 +31,12 @@ export interface ApiEntry {
   events:     ApiMemberEntry[];
   methods:    ApiMemberEntry[];
 }
+
+/** Compact entry in search-index.json — loaded once at startup */
+export interface SearchIndexEntry {
+  n: string;   // typeName
+  s: string;   // summary
+  a: string;   // assembly
+  p: string;   // nugetPackage
+  m: string[]; // member names (props + events + methods)
+}

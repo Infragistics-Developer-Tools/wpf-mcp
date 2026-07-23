@@ -12,16 +12,20 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "docs:restore": "dotnet restore nuget/WpfDocs.csproj --packages nuget/packages",
-    "generate": "npm run docs:restore && npx tsx scripts/build-api.ts",
+    "generate:types": "dotnet run --project scripts/type-extractor/TypeExtractor.csproj -- nuget/packages nuget/type-info.json",
+    "generate": "npm run docs:restore && npm run generate:types && npx tsx scripts/build-api.ts",
     "build:all": "npm run generate && npm run build",
     "inspector": "npx @modelcontextprotocol/inspector node dist/index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
     "zod": "^3.25.1"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^22.20.1",
     "tsx": "^4.21.0",
     "typescript": "^5.5.0"
   }

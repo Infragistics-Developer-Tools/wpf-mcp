@@ -1,7 +1,6 @@
-import { performance } from 'perf_hooks';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { loadApiDoc } from '../lib/api-doc-loader.js';
-import type { ComponentEntry } from '../lib/types.js';
+import type { ComponentEntry, SearchIndexEntry } from '../lib/types.js';
 
 type LogFn = (tool: string, input: Record<string, unknown>, output: string, ms: number) => void;
 
@@ -135,6 +134,67 @@ export function createGetApiReferenceHandler(components: ComponentEntry[], log: 
 
     const text = out.join('\n');
     log('get_wpf_api_reference', input, text, Math.round(performance.now() - start));
+    return { content: [{ type: 'text' as const, text }] };
+  };
+}
+
+// ── search_wpf_api ────────────────────────────────────────────────────────────
+
+type SearchResult = { typeName: string; summary: string; nugetPackage: string; matchedOn: string };
+
+export function createSearchApiHandler(index: SearchIndexEntry[], log: LogFn) {
+  return async (input: { query: string; limit?: number }): Promise<CallToolResult> => {
+    const start = performance.now();
+    const q = input.query.toLowerCase();
+    const limit = Math.min(input.limit ?? 10, 50);
+
+    const nameMatches:   SearchResult[] = [];
+    const summaryMatches: SearchResult[] = [];
+    const memberMatches:  SearchResult[] = [];
+    const seen = new Set<string>();
+
+    for (const entry of index) {
+      const typeLower    = entry.n.toLowerCase();
+      const summaryLower = entry.s.toLowerCase();
+
+      if (typeLower.includes(q)) {
+        nameMatches.push({ typeName: entry.n, summary: entry.s, nugetPackage: entry.p, matchedOn: 'name' });
+        seen.add(entry.n);
+        continue;
+      }
+      if (summaryLower.includes(q)) {
+        summaryMatches.push({ typeName: entry.n, summary: entry.s, nugetPackage: entry.p, matchedOn: 'summary' });
+        seen.add(entry.n);
+        continue;
+      }
+      const matchedMember = entry.m.find(m => m.toLowerCase().includes(q));
+      if (matchedMember) {
+        memberMatches.push({ typeName: entry.n, summary: entry.s, nugetPackage: entry.p, matchedOn: `member: ${matchedMember}` });
+        seen.add(entry.n);
+      }
+    }
+
+    const results = [...nameMatches, ...summaryMatches, ...memberMatches].slice(0, limit);
+
+    if (results.length === 0) {
+      const text = `No API entries found matching "${input.query}". Try a shorter keyword or call list_wpf_components to browse available controls.`;
+      log('search_wpf_api', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+      return { content: [{ type: 'text', text }], isError: true };
+    }
+
+    const lines = results.map(r =>
+      `### ${r.typeName}\n- **Matched:** ${r.matchedOn}\n- **NuGet:** \`${r.nugetPackage}\`\n- ${r.summary || '_(no summary)_'}`
+    );
+
+    const text = [
+      `# WPF API Search: "${input.query}" (${results.length} of ${seen.size + results.length} matches)`,
+      '',
+      ...lines,
+      '',
+      `_Call \`get_wpf_api_reference\` with any type name above for full member details._`,
+    ].join('\n\n');
+
+    log('search_wpf_api', input as Record<string, unknown>, text, Math.round(performance.now() - start));
     return { content: [{ type: 'text' as const, text }] };
   };
 }

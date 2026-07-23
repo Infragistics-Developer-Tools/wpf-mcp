@@ -10,7 +10,7 @@
  *   npm run generate       ← this script
  */
 
-import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, promises as fsPromises } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -76,13 +76,21 @@ function extractTag(xml: string, tag: string): string {
 interface RawMember { kind: string; fullName: string; name: string; summary: string; remarks: string }
 
 function parseAllMembers(xml: string): RawMember[] {
-  const re = /<member\s+name="([TPMEFtpmef]):([^"]+)">([\s\S]*?)<\/member>/g;
+  // Split on <member so each chunk is small — avoids [\s\S]*? on a multi-MB file
+  const nameRe = /^name="([TPMEFtpmef]):([^"]+)"/;
   const results: RawMember[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(xml)) !== null) {
-    const [, kind, fullName, body] = m;
+  const chunks = xml.split('<member ');
+  for (let i = 1; i < chunks.length; i++) {  // skip index 0 (before first <member)
+    const chunk = chunks[i];
+    const nameMatch = nameRe.exec(chunk);
+    if (!nameMatch) continue;
+    const [, kind, fullName] = nameMatch;
     const shortName = fullName.replace(/\(.*$/, '').split('.').pop() ?? '';
     if (!shortName || shortName.startsWith('get_') || shortName.startsWith('set_') || shortName.startsWith('.')) continue;
+    // Body is everything after the closing > of the opening tag, up to </member>
+    const gtIdx = chunk.indexOf('>');
+    const endIdx = chunk.indexOf('</member>');
+    const body = gtIdx >= 0 && endIdx > gtIdx ? chunk.substring(gtIdx + 1, endIdx) : '';
     results.push({ kind, fullName, name: shortName, summary: extractTag(body, 'summary'), remarks: extractTag(body, 'remarks') });
   }
   return results;
@@ -202,34 +210,31 @@ function loadTypeInfo(): Record<string, TypeInfoEntry | string> {
   return result;
 }
 
-/** Second pass: enrich each API file with inherited Infragistics properties. */
-function enrichWithInheritance(typeInfo: Record<string, TypeInfoEntry | string>): number {
-  const files = readdirSync(API_OUT_DIR).filter((f: string) => f.endsWith('.json'));
+/** Second pass: enrich entries in-memory with inherited Infragistics properties. */
+function enrichWithInheritance(
+  entries: Map<string, ApiEntry>,
+  typeInfo: Record<string, TypeInfoEntry | string>
+): number {
   let enriched = 0;
 
-  for (const file of files) {
-    const typeName = file.replace('.json', '');
+  for (const [typeName, entry] of entries) {
     if (!(`${typeName}.__baseType` in typeInfo)) continue;
 
-    const filePath = join(API_OUT_DIR, file);
-    const entry = JSON.parse(readFileSync(filePath, 'utf-8')) as ApiEntry;
     const knownProps = new Set(entry.properties.map(p => p.name));
+    const visited = new Set<string>([typeName]);
     let added = false;
     let current = typeName;
 
     while (true) {
       const base = typeInfo[`${current}.__baseType`];
       if (!base || typeof base !== 'string') break;
+      if (visited.has(base)) break;   // cycle guard
+      visited.add(base);
 
-      const basePath = join(API_OUT_DIR, `${base}.json`);
-      if (!existsSync(basePath)) break;
+      const baseEntry = entries.get(base);
+      if (!baseEntry) break;
 
-      const baseEntry = JSON.parse(readFileSync(basePath, 'utf-8')) as ApiEntry;
-      const baseDirectProps = baseEntry.properties.filter(
-        p => !p.declaredOn && !knownProps.has(p.name)
-      );
-
-      for (const p of baseDirectProps) {
+      for (const p of baseEntry.properties.filter(p => !p.declaredOn && !knownProps.has(p.name))) {
         entry.properties.push({ ...p, declaredOn: base });
         knownProps.add(p.name);
         added = true;
@@ -237,15 +242,12 @@ function enrichWithInheritance(typeInfo: Record<string, TypeInfoEntry | string>)
       current = base;
     }
 
-    if (added) {
-      writeFileSync(filePath, JSON.stringify(entry, null, 2), 'utf-8');
-      enriched++;
-    }
+    if (added) enriched++;
   }
   return enriched;
 }
 
-function generate() {
+async function generate() {
   mkdirSync(API_OUT_DIR, { recursive: true });
 
   const typeInfo = loadTypeInfo();
@@ -253,28 +255,49 @@ function generate() {
   console.log(`Scanning ${sources.length} XML documentation files...`);
 
   const registry: RegistryEntry[] = [];
+  const entries = new Map<string, ApiEntry>();
   const seenTypes = new Set<string>();
-  let apiCount = 0;
 
-  for (const { xmlPath, packageId } of sources) {
+  for (let fileIdx = 0; fileIdx < sources.length; fileIdx++) {
+    const { xmlPath, packageId } = sources[fileIdx];
+    const fileName = xmlPath.split(/[\\/]/).pop()!;
+    const t0 = Date.now();
+    process.stdout.write(`  [${fileIdx + 1}/${sources.length}] ${fileName} ... `);
+
     const xml = readFileSync(xmlPath, 'utf-8');
 
     const assemblyMatch = xml.match(/<assembly>\s*<name>([^<]+)<\/name>/);
-    if (!assemblyMatch) continue;
+    if (!assemblyMatch) { console.log('skip (no assembly)'); continue; }
     const assemblyName = assemblyMatch[1].trim();
     const xmlnsInfo = ASSEMBLY_XMLNS[assemblyName] ?? DEFAULT_XMLNS;
 
     const members = parseAllMembers(xml);
-    const types = members.filter(m => m.kind === 'T' && m.fullName.startsWith('Infragistics.'));
 
-    for (const type of types) {
+    // Build lookup maps once per file — O(n) instead of O(n × types)
+    const typeMembers = new Map<string, { props: RawMember[]; events: RawMember[]; methods: RawMember[] }>();
+    const typeList: RawMember[] = [];
+    for (const m of members) {
+      if (m.kind === 'T') { typeList.push(m); continue; }
+      // m.fullName for a member is "Namespace.TypeName.MemberName" — strip last segment
+      const lastDot = m.fullName.lastIndexOf('.');
+      if (lastDot < 0) continue;
+      const typeFqn = m.fullName.substring(0, lastDot);
+      if (!typeMembers.has(typeFqn)) typeMembers.set(typeFqn, { props: [], events: [], methods: [] });
+      const bucket = typeMembers.get(typeFqn)!;
+      if (m.kind === 'P') bucket.props.push(m);
+      else if (m.kind === 'E') bucket.events.push(m);
+      else if (m.kind === 'M' && !m.name.startsWith('#')) bucket.methods.push(m);
+    }
+
+    for (const type of typeList) {
+      if (!type.fullName.startsWith('Infragistics.')) continue;
       const typeName = type.name;
       if (shouldExclude(typeName)) continue;
-      if (seenTypes.has(typeName)) continue; // deduplicate across packages
+      if (seenTypes.has(typeName)) continue;
       seenTypes.add(typeName);
 
       const dotnetNs = type.fullName.substring(0, type.fullName.lastIndexOf('.'));
-      const typePrefix = `${type.fullName}.`;
+      const bucket = typeMembers.get(type.fullName) ?? { props: [], events: [], methods: [] };
 
       const entry: ApiEntry = {
         component:      typeName,
@@ -285,20 +308,22 @@ function generate() {
         dotnetNamespace: dotnetNs,
         summary:        type.summary,
         remarks:        type.remarks,
-        properties: members.filter(m => m.kind === 'P' && m.fullName.startsWith(typePrefix))
+        properties: bucket.props
+                           .filter(m => m.summary.toLowerCase() !== 'internal')
                            .map(m => {
                              const ti = typeInfo[`${typeName}.${m.name}`];
                              const extra = (ti && typeof ti === 'object') ? ti : {};
                              return { name: m.name, summary: m.summary, ...extra };
                            }),
-        events:     members.filter(m => m.kind === 'E' && m.fullName.startsWith(typePrefix))
+        events:     bucket.events
+                           .filter(m => m.summary.toLowerCase() !== 'internal')
                            .map(m => ({ name: m.name, summary: m.summary })),
-        methods:    members.filter(m => m.kind === 'M' && m.fullName.startsWith(typePrefix) && !m.name.startsWith('#'))
+        methods:    bucket.methods
+                           .filter(m => m.summary.toLowerCase() !== 'internal')
                            .map(m => ({ name: m.name, summary: m.summary })),
       };
 
-      writeFileSync(join(API_OUT_DIR, `${typeName}.json`), JSON.stringify(entry, null, 2), 'utf-8');
-      apiCount++;
+      entries.set(typeName, entry);
 
       // Registry: Xam* controls only (used by list_wpf_components)
       if (typeName.startsWith('Xam')) {
@@ -313,17 +338,46 @@ function generate() {
         });
       }
     }
+    console.log(`${Date.now() - t0}ms  (${members.length} members)`);
   }
+
+  // Enrich in-memory, then write everything at once
+  console.log(`Enriching inheritance...`);
+  const enriched = enrichWithInheritance(entries, typeInfo);
+
+  console.log(`Writing ${entries.size} API files...`);
+  await Promise.all(
+    [...entries.entries()].map(([typeName, entry]) =>
+      fsPromises.writeFile(join(API_OUT_DIR, `${typeName}.json`), JSON.stringify(entry), 'utf-8')
+    )
+  );
 
   registry.sort((a, b) => a.component.localeCompare(b.component));
   writeFileSync(NS_OUT_FILE, JSON.stringify(registry, null, 2), 'utf-8');
 
-  const enriched = enrichWithInheritance(typeInfo);
+  // Search index — lightweight flat array, loaded once at MCP startup
+  const searchIndex = [...entries.values()].map(e => ({
+    n: e.component,
+    s: e.summary,
+    a: e.assembly,
+    p: e.nugetPackage,
+    m: [
+      ...e.properties.map(x => x.name),
+      ...e.events.map(x => x.name),
+      ...e.methods.map(x => x.name),
+    ],
+  }));
+  writeFileSync(
+    join(ROOT, 'src', 'data', 'search-index.json'),
+    JSON.stringify(searchIndex),
+    'utf-8'
+  );
 
   console.log(`Done.`);
-  console.log(`  API files:  ${apiCount} \u2192 src/data/api/`);
-  console.log(`  Enriched:   ${enriched} types with inherited Infragistics properties`);
-  console.log(`  Registry:   ${registry.length} Xam* controls → src/data/namespaces.json`);
+  console.log(`  API files:    ${entries.size} → src/data/api/`);
+  console.log(`  Enriched:     ${enriched} types with inherited Infragistics properties`);
+  console.log(`  Registry:     ${registry.length} Xam* controls → src/data/namespaces.json`);
+  console.log(`  Search index: ${searchIndex.length} types → src/data/search-index.json`);
 }
 
 generate();

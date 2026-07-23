@@ -29,7 +29,30 @@ export const getApiReferenceSchema = {
     ),
 };
 
+export const searchApiSchema = {
+  query: z
+    .string()
+    .min(1)
+    .max(128)
+    .describe(
+      'Keyword or phrase to search across type names, summaries, and member names. ' +
+      'Case-insensitive. Examples: "filter", "DataSource", "export", "pivot", "series marker".'
+    ),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(50)
+    .default(10)
+    .describe('Maximum number of results to return. Defaults to 10, max 50.'),
+};
+
 export type GetApiReferenceInput = {
   component: string;
   kind: 'all' | 'properties' | 'methods' | 'events';
+};
+
+export type SearchApiInput = {
+  query: string;
+  limit?: number;
 };

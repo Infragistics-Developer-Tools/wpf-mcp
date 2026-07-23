@@ -5,19 +5,12 @@ Call this FIRST — before writing any XAML or selecting NuGet packages. AI mode
 
 Optionally pass a filter keyword (e.g. "grid", "chart", "dock", "editor") to narrow results.
 
-Returns a Markdown list. Each entry includes component name, complete xmlns declaration, NuGet package, assembly, and description.
-// REPLACED_SENTINEL
-
-Call this first — before writing any XAML or C# — to get the correct xmlns declaration for each control you plan to use. Wrong namespace URIs are the most common compile-time error when working with Infragistics WPF.
-
 Returns one entry per component including:
   • component name (pass to get_wpf_api_reference for full API docs)
-  • XAML namespace URI (use verbatim in xmlns declarations)
+  • XAML namespace URI — use verbatim in xmlns declarations
   • recommended prefix (e.g. igDP, igDock, ig)
   • NuGet package to install
-  • short description of what the control does and when to use it
-
-No parameters required. Returns all components in one call.`,
+  • short description of what the control does`,
 
   get_wpf_api_reference: `Get API documentation for a specific Infragistics WPF component parsed from the installed NuGet XML documentation files.
 
@@ -32,4 +25,16 @@ Returns:
 Important: XamDataGrid exposes most of its feature surface (DataSource, FieldLayouts, FieldSettings, FieldLayoutSettings, etc.) through its base class XamDataPresenter. If the returned member list is sparse for XamDataGrid, also call get_wpf_api_reference("XamDataPresenter") to get the full inherited property set.
 
 Use kind="properties", "methods", or "events" to reduce response size when you only need one category. Defaults to "all".`,
+
+  search_wpf_api: `Search Infragistics WPF API entries by keyword across type names, summaries, and member names.
+
+Use this when you don't know the exact type name, or to discover which types relate to a feature. Returns a ranked list of matching types with their summaries and matched context — then call get_wpf_api_reference for full member details.
+
+Examples:
+  • "filter" → finds XamGrid filter types, FilterRecord, FilterOperand, etc.
+  • "DataSource" → finds types that declare a DataSource member
+  • "export" → finds DataPresenterExcelExporter, WordWriter, etc.
+  • "pivot" → finds XamPivotGrid, OlapDataProvider, etc.
+
+Returns up to 10 results by default (configurable up to 50), ranked: type name match first, then summary match, then member name match.`,
 };
