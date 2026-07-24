@@ -6,8 +6,8 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 import { TOOL_DESCRIPTIONS } from './tools/constants.js';
-import { listComponentsSchema, getApiReferenceSchema, searchApiSchema } from './tools/schemas.js';
-import { createListComponentsHandler, createGetApiReferenceHandler, createSearchApiHandler } from './tools/handlers.js';
+import { listComponentsSchema, getApiReferenceSchema, searchApiSchema, getProjectScaffoldSchema } from './tools/schemas.js';
+import { createListComponentsHandler, createGetApiReferenceHandler, createSearchApiHandler, createGetProjectScaffoldHandler } from './tools/handlers.js';
 import type { ComponentEntry, SearchIndexEntry } from './lib/types.js';
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
@@ -33,12 +33,14 @@ function log(tool: string, input: Record<string, unknown>, output: string, ms: n
 const server = new McpServer(
   { name: 'infragistics-wpf', version: '0.1.0' },
   {
-    instructions:
-      'Infragistics NetAdvantage for WPF MCP server — component registry and NuGet-sourced API reference. ' +
-      'ALWAYS call list_wpf_components before writing any XAML to get the correct xmlns namespace URI and NuGet package. ' +
-      'Wrong namespace URIs are the leading cause of compile errors with Infragistics WPF. ' +
-      'For full API coverage call get_wpf_api_reference on both the component and its base class — ' +
-      'e.g. XamDataGrid + XamDataPresenter, since grid feature properties (DataSource, FieldLayouts, FieldSettings) live on the base.',
+    instructions: `
+      Infragistics NetAdvantage for WPF MCP server — component registry, API reference, and project scaffolding.
+      ALWAYS call list_wpf_components before writing any XAML to get the correct xmlns namespace URI; wrong values cause immediate compile errors.
+      To look up any Infragistics type: use search_wpf_api to discover the name, then get_wpf_api_reference for full members.
+      For Xam* controls, list_wpf_components gives the name directly.
+      Infragistics controls commonly expose their API through base classes — if get_wpf_api_reference returns a sparse member list, call it again on the parent type to get the full surface.
+      For new WPF projects: call list_wpf_components to resolve component names, then get_project_scaffold for all dotnet CLI commands and xmlns declarations.
+    `,
   }
 );
 
@@ -72,6 +74,16 @@ server.registerTool(
     inputSchema: searchApiSchema,
   },
   createSearchApiHandler(searchIndex, log)
+);
+
+server.registerTool(
+  'get_project_scaffold',
+  {
+    description: TOOL_DESCRIPTIONS.get_project_scaffold,
+    annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
+    inputSchema: getProjectScaffoldSchema,
+  },
+  createGetProjectScaffoldHandler(components, log)
 );
 
 // ── Transport ─────────────────────────────────────────────────────────────────

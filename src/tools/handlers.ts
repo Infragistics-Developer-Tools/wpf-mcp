@@ -138,6 +138,102 @@ export function createGetApiReferenceHandler(components: ComponentEntry[], log: 
   };
 }
 
+// ── get_project_scaffold ─────────────────────────────────────────────────────
+
+export function createGetProjectScaffoldHandler(components: ComponentEntry[], log: LogFn) {
+  return async (input: { components: string[]; projectName?: string; framework?: string }): Promise<CallToolResult> => {
+    const start = performance.now();
+    const { components: requested, projectName = 'MyWpfApp', framework = 'net8.0' } = input;
+
+    // Validate projectName — must be a safe .NET identifier
+    if (!/^[a-zA-Z][a-zA-Z0-9._-]*$/.test(projectName)) {
+      const text =
+        `Invalid project name "${projectName}". ` +
+        `Project names must start with a letter and contain only letters, digits, dots, underscores, or hyphens.`;
+      log('get_project_scaffold', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+      return { content: [{ type: 'text', text }], isError: true };
+    }
+
+    const resolved: Array<{ component: string; nugetPackage: string; xmlns: string }> = [];
+    const notFoundWarnings: string[] = [];
+
+    for (const name of requested) {
+      const entry = components.find(c => c.component.toLowerCase() === name.toLowerCase());
+      if (!entry) {
+        const suggestions = components
+          .filter(c => c.component.toLowerCase().includes(name.toLowerCase()))
+          .map(c => c.component)
+          .slice(0, 5);
+        const hint = suggestions.length > 0
+          ? ` Did you mean: ${suggestions.map(s => `\`${s}\``).join(', ')}? ` +
+            `Call \`list_wpf_components(filter: "${name}")\` to browse options.`
+          : ` Call \`list_wpf_components\` to browse all available component names.`;
+        notFoundWarnings.push(`\`${name}\` not found in registry.${hint}`);
+      } else {
+        resolved.push({
+          component: entry.component,
+          nugetPackage: entry.nugetPackage,
+          xmlns: `xmlns:${entry.defaultPrefix}="${entry.xamlNamespace}"`,
+        });
+      }
+    }
+
+    if (resolved.length === 0) {
+      const text =
+        `Cannot generate scaffold — none of the requested components were found in the registry.\n\n` +
+        notFoundWarnings.map(w => `- ${w}`).join('\n') +
+        `\n\nCall \`list_wpf_components\` (with an optional filter keyword) to get exact component names, ` +
+        `then call \`get_project_scaffold\` again with the correct names.`;
+      log('get_project_scaffold', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+      return { content: [{ type: 'text', text }], isError: true };
+    }
+
+    const uniquePackages = [...new Set(resolved.map(r => r.nugetPackage))];
+    const uniqueXmlns   = [...new Set(resolved.map(r => r.xmlns))];
+
+    const lines: string[] = [];
+
+    if (notFoundWarnings.length > 0) {
+      lines.push(`> **Warning:** Some components were not found and were skipped:`);
+      notFoundWarnings.forEach(w => lines.push(`> - ${w}`));
+      lines.push('');
+    }
+
+    lines.push(`# WPF Project Scaffold: \`${projectName}\``);
+    lines.push('');
+    lines.push('## 1. Create and configure the project');
+    lines.push('');
+    lines.push('```bash');
+    lines.push(`dotnet new wpf -n ${projectName} --framework ${framework}`);
+    lines.push(`cd ${projectName}`);
+    for (const pkg of uniquePackages) {
+      lines.push(`dotnet add package ${pkg}`);
+    }
+    lines.push('dotnet restore');
+    lines.push('```');
+    lines.push('');
+    lines.push('## 2. Add xmlns declarations to MainWindow.xaml');
+    lines.push('');
+    lines.push('```xml');
+    lines.push('<Window ...');
+    for (const xmlns of uniqueXmlns) {
+      lines.push(`        ${xmlns}`);
+    }
+    lines.push('>');
+    lines.push('```');
+
+    lines.push('');
+    lines.push('## Components resolved');
+    for (const r of resolved) {
+      lines.push(`- **${r.component}** → \`${r.nugetPackage}\``);
+    }
+
+    const text = lines.join('\n');
+    log('get_project_scaffold', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+    return { content: [{ type: 'text' as const, text }] };
+  };
+}
+
 // ── search_wpf_api ────────────────────────────────────────────────────────────
 
 type SearchResult = { typeName: string; summary: string; nugetPackage: string; matchedOn: string };
@@ -145,39 +241,51 @@ type SearchResult = { typeName: string; summary: string; nugetPackage: string; m
 export function createSearchApiHandler(index: SearchIndexEntry[], log: LogFn) {
   return async (input: { query: string; limit?: number }): Promise<CallToolResult> => {
     const start = performance.now();
-    const q = input.query.toLowerCase();
+    const tokens = input.query.toLowerCase().trim().split(/\s+/).filter(Boolean);
     const limit = Math.min(input.limit ?? 10, 50);
 
-    const nameMatches:   SearchResult[] = [];
+    const nameMatches:    SearchResult[] = [];
     const summaryMatches: SearchResult[] = [];
     const memberMatches:  SearchResult[] = [];
-    const seen = new Set<string>();
 
     for (const entry of index) {
       const typeLower    = entry.n.toLowerCase();
       const summaryLower = entry.s.toLowerCase();
+      const membersLower = entry.m.map(m => m.toLowerCase());
 
-      if (typeLower.includes(q)) {
+      // AND semantics: every token must appear somewhere in this entry
+      const allMatch = tokens.every(t =>
+        typeLower.includes(t) ||
+        summaryLower.includes(t) ||
+        membersLower.some(m => m.includes(t))
+      );
+      if (!allMatch) continue;
+
+      if (tokens.every(t => typeLower.includes(t))) {
         nameMatches.push({ typeName: entry.n, summary: entry.s, nugetPackage: entry.p, matchedOn: 'name' });
-        seen.add(entry.n);
-        continue;
-      }
-      if (summaryLower.includes(q)) {
+      } else if (tokens.every(t => summaryLower.includes(t))) {
         summaryMatches.push({ typeName: entry.n, summary: entry.s, nugetPackage: entry.p, matchedOn: 'summary' });
-        seen.add(entry.n);
-        continue;
-      }
-      const matchedMember = entry.m.find(m => m.toLowerCase().includes(q));
-      if (matchedMember) {
-        memberMatches.push({ typeName: entry.n, summary: entry.s, nugetPackage: entry.p, matchedOn: `member: ${matchedMember}` });
-        seen.add(entry.n);
+      } else {
+        const matchedMembers = [...new Set(
+          tokens.flatMap(t => entry.m.filter(m => m.toLowerCase().includes(t)))
+        )];
+        memberMatches.push({
+          typeName: entry.n,
+          summary: entry.s,
+          nugetPackage: entry.p,
+          matchedOn: `members: ${matchedMembers.join(', ')}`,
+        });
       }
     }
 
+    const totalFound = nameMatches.length + summaryMatches.length + memberMatches.length;
     const results = [...nameMatches, ...summaryMatches, ...memberMatches].slice(0, limit);
 
     if (results.length === 0) {
-      const text = `No API entries found matching "${input.query}". Try a shorter keyword or call list_wpf_components to browse available controls.`;
+      const hint = tokens.length > 1
+        ? `It looks like you may be trying to verify specific members on a known type. Use get_wpf_api_reference("TypeName") instead — it returns the complete property, method, and event list so you can inspect it directly. Reserve search_wpf_api for discovery when you don't know the type name yet.`
+        : `Try a shorter keyword or call list_wpf_components to browse available controls.`;
+      const text = `No API entries found matching "${input.query}". ${hint}`;
       log('search_wpf_api', input as Record<string, unknown>, text, Math.round(performance.now() - start));
       return { content: [{ type: 'text', text }], isError: true };
     }
@@ -187,7 +295,7 @@ export function createSearchApiHandler(index: SearchIndexEntry[], log: LogFn) {
     );
 
     const text = [
-      `# WPF API Search: "${input.query}" (${results.length} of ${seen.size + results.length} matches)`,
+      `# WPF API Search: "${input.query}" (${results.length} of ${totalFound} matches)`,
       '',
       ...lines,
       '',

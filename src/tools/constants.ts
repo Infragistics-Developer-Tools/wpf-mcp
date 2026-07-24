@@ -1,40 +1,26 @@
 export const TOOL_DESCRIPTIONS = {
-  list_wpf_components: `List all available Infragistics NetAdvantage for WPF controls with their canonical XAML namespace URI, recommended xmlns prefix, required NuGet package, and a description.
+  list_wpf_components: `List Infragistics WPF controls with their canonical XAML namespace URI, recommended xmlns prefix, required NuGet package, and description.
 
-Call this FIRST — before writing any XAML or selecting NuGet packages. AI models frequently hallucinate Infragistics namespace URIs (e.g. inventing "http://infragistics.com/DataGrid" instead of the correct "http://infragistics.com/DataPresenter"), which causes immediate compile errors. This tool returns the canonical values from the component registry.
+Call this FIRST — before writing any XAML or selecting NuGet packages. Namespace URIs must be exact; wrong values cause immediate compile errors.
 
-Optionally pass a filter keyword (e.g. "grid", "chart", "dock", "editor") to narrow results.
+Returns one entry per component: name, xmlns URI, prefix, NuGet package, and description. Pass the name to get_wpf_api_reference for full API docs.`,
 
-Returns one entry per component including:
-  • component name (pass to get_wpf_api_reference for full API docs)
-  • XAML namespace URI — use verbatim in xmlns declarations
-  • recommended prefix (e.g. igDP, igDock, ig)
-  • NuGet package to install
-  • short description of what the control does`,
+  get_wpf_api_reference: `Get full API documentation for an Infragistics WPF type: xmlns declaration, NuGet package, type summary, and all members (properties, methods, events) with descriptions.
 
-  get_wpf_api_reference: `Get API documentation for a specific Infragistics WPF component parsed from the installed NuGet XML documentation files.
+Use after list_wpf_components to resolve the component name. Also use to check whether a specific property or event exists on a known type — it returns the complete member list.
 
-Use this after calling list_wpf_components to resolve the exact component name. Do NOT guess component names — if unsure, call list_wpf_components first.
+Note: XamDataGrid inherits most of its surface (DataSource, FieldLayouts, FieldSettings, FieldLayoutSettings) from XamDataPresenter. If the member list is sparse, also call get_wpf_api_reference("XamDataPresenter").`,
 
-Returns:
-  • Correct xmlns declaration to copy verbatim into XAML
-  • NuGet package and assembly name
-  • Type summary and remarks
-  • Direct members (properties, methods, events) with descriptions
+  get_project_scaffold: `Generate dotnet CLI setup commands and XAML xmlns declarations for a new Infragistics WPF project.
 
-Important: XamDataGrid exposes most of its feature surface (DataSource, FieldLayouts, FieldSettings, FieldLayoutSettings, etc.) through its base class XamDataPresenter. If the returned member list is sparse for XamDataGrid, also call get_wpf_api_reference("XamDataPresenter") to get the full inherited property set.
-
-Use kind="properties", "methods", or "events" to reduce response size when you only need one category. Defaults to "all".`,
+Call this when a user wants to start a new WPF project. Pass component names resolved via list_wpf_components. Returns:
+  • dotnet new, dotnet add package, and dotnet restore commands
+  • xmlns declarations for MainWindow.xaml`,
 
   search_wpf_api: `Search Infragistics WPF API entries by keyword across type names, summaries, and member names.
 
-Use this when you don't know the exact type name, or to discover which types relate to a feature. Returns a ranked list of matching types with their summaries and matched context — then call get_wpf_api_reference for full member details.
+Use when you don't know the exact type name or want to discover types related to a feature. Do NOT use to verify members on a known type — call get_wpf_api_reference instead, which returns the complete member list.
 
-Examples:
-  • "filter" → finds XamGrid filter types, FilterRecord, FilterOperand, etc.
-  • "DataSource" → finds types that declare a DataSource member
-  • "export" → finds DataPresenterExcelExporter, WordWriter, etc.
-  • "pivot" → finds XamPivotGrid, OlapDataProvider, etc.
-
-Returns up to 10 results by default (configurable up to 50), ranked: type name match first, then summary match, then member name match.`,
+Examples: "filter", "DataSource", "export", "pivot".
+Returns a ranked list of matching types — call get_wpf_api_reference on any result for full details.`,
 };
