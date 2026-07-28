@@ -301,10 +301,14 @@ async function generate() {
     const typeList: RawMember[] = [];
     for (const m of members) {
       if (m.kind === 'T') { typeList.push(m); continue; }
-      // m.fullName for a member is "Namespace.TypeName.MemberName" — strip last segment
-      const lastDot = m.fullName.lastIndexOf('.');
+      // m.fullName for a member is "Namespace.TypeName.MemberName(Param1,Param2)" — strip
+      // the parameter list FIRST, since parameter types (e.g. "System.String") contain
+      // dots of their own and would otherwise make lastIndexOf('.') land inside them
+      // instead of before the member name, silently dropping the member from its type.
+      const memberPath = m.fullName.replace(/\(.*$/, '');
+      const lastDot = memberPath.lastIndexOf('.');
       if (lastDot < 0) continue;
-      const typeFqn = m.fullName.substring(0, lastDot);
+      const typeFqn = memberPath.substring(0, lastDot);
       if (!typeMembers.has(typeFqn)) typeMembers.set(typeFqn, { props: [], events: [], methods: [] });
       const bucket = typeMembers.get(typeFqn)!;
       if (m.kind === 'P') bucket.props.push(m);

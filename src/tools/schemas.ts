@@ -28,7 +28,9 @@ export const searchApiSchema = {
     .min(1)
     .max(128)
     .describe(`Keyword or phrase to search across type names, summaries, and member names.
-      Case-insensitive. Multiple words use AND logic — every word must appear somewhere in the same type.
+      Case-insensitive. Multiple words use OR/ranked logic — a type matching MORE words ranks
+      higher, but a type matching only one word can still be returned, so prefer 2-4
+      distinct/specific words over a full sentence.
       Examples: "filter", "DataSource", "FieldSettings AllowEdit", "XamDataGrid sort".`),
   limit: z
     .number()

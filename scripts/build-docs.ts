@@ -176,8 +176,8 @@ function stripAdoc(raw: string): string {
     // ── Remove structural blocks we don't want ───────────────────────────────
     // //// comment blocks (metadata lives here)
     .replace(/\/\/\/\/[\s\S]*?\/\/\/\//g, '')
-    // ifdef / endif / ifeval directives (whole line)
-    .replace(/^i[fn][de][ef][vali]*::[^\[]*\[[^\]]*\]\s*$/gm, '')
+    // ifdef / ifndef / ifeval / endif directives (whole line)
+    .replace(/^(?:ifdef|ifndef|ifeval)::[^\[]*\[[^\]]*\]\s*$/gm, '')
     .replace(/^endif::[^\[]*\[\]\s*$/gm, '')
     // Single-line // comments
     .replace(/^\/\/ .+$/gm, '')
