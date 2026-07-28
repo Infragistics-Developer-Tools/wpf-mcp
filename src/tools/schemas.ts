@@ -58,6 +58,43 @@ export const getProjectScaffoldSchema = {
     .describe(`Target framework version. Defaults to "net8.0".`),
 };
 
+export const searchDocsSchema = {
+  query: z
+    .string()
+    .max(128)
+    .optional()
+    .describe(`Keyword or phrase to search across documentation titles, tags, control names, and summaries.
+      Case-insensitive. Words use OR/ranked matching — topics matching MORE words rank higher, but a topic matching
+      only one word can still be returned, so prefer 2-4 distinct/specific words over a full sentence.
+      Examples: "restrict floating", "getting started", "column series", "grouping summary".
+      Omit entirely (with \`control\` set) to browse ALL topics for a component.`),
+  control: z
+    .string()
+    .max(64)
+    .optional()
+    .describe(`Optional control name to narrow results, e.g. "XamDockManager", "ContentPane", "XamDataGrid".
+      Case-insensitive substring match against the topic's associated control names.
+      At least one of \`query\` or \`control\` must be provided.`),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(50)
+    .default(10)
+    .describe(`Maximum number of results to return. Defaults to 10, max 50.`),
+};
+
+export const getDocSchema = {
+  topic: z
+    .string()
+    .min(1)
+    .max(160)
+    .describe(`The exact topic slug returned by search_wpf_docs, e.g.
+      "xamdockmanager-add-content-to-a-contentpane" or "xamdockmanager-getting-started-with-xamdockmanager".
+      Case-insensitive.`),
+};
+
+
 export type GetApiReferenceInput = {
   component: string;
   kind: 'all' | 'properties' | 'methods' | 'events';

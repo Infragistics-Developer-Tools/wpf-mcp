@@ -45,7 +45,7 @@ Add to `claude_desktop_config.json`:
 ## Data pipeline
 
 ```
-NuGet packages (26.2.x)
+NuGet packages (26.1.x)
   ├── *.dll  →  C# TypeExtractor (reflection)  →  nuget/type-info.json
   │                                                 (base types, property types, enum values)
   └── *.xml  ─────────────────────────────────┐

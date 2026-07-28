@@ -1,0 +1,6 @@
+[submodule "docs/docs-wpf"]
+	path = docs/docs-wpf
+	url = https://github.com/Infragistics/docs-wpf
+[submodule "docs/docs-common"]
+	path = docs/docs-common
+	url = https://github.com/Infragistics/docs-common

@@ -1,6 +1,7 @@
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { loadApiDoc } from '../lib/api-doc-loader.js';
-import type { ComponentEntry, SearchIndexEntry } from '../lib/types.js';
+import { loadDoc } from '../lib/docs-loader.js';
+import type { ComponentEntry, SearchIndexEntry, DocIndexEntry } from '../lib/types.js';
 
 type LogFn = (tool: string, input: Record<string, unknown>, output: string, ms: number) => void;
 
@@ -125,10 +126,14 @@ export function createGetApiReferenceHandler(components: ComponentEntry[], log: 
       }
     }
 
-    if (!hasAny) {      out.push(
+    if (!hasAny) {
+      const baseHint = doc.baseType
+        ? `Call get_wpf_api_reference("${doc.baseType}") to see the inherited API surface.`
+        : `This type has no recorded base type in the registry — it may be a leaf/root type with no further members to inherit.`;
+      out.push(
         '',
         `_No ${kind === 'all' ? '' : kind + ' '}members defined directly on this type._`,
-        '_Infragistics controls inherit most of their API from base classes. Call get_wpf_api_reference on the base class — e.g. XamDataPresenter for XamDataGrid._'
+        `_This type's own API surface is empty or was filtered by "kind". ${baseHint}_`
       );
     }
 
@@ -236,7 +241,7 @@ export function createGetProjectScaffoldHandler(components: ComponentEntry[], lo
 
 // ── search_wpf_api ────────────────────────────────────────────────────────────
 
-type SearchResult = { typeName: string; summary: string; nugetPackage: string; matchedOn: string };
+type SearchResult = { typeName: string; summary: string; nugetPackage: string; matchedOn: string; score: number };
 
 export function createSearchApiHandler(index: SearchIndexEntry[], log: LogFn) {
   return async (input: { query: string; limit?: number }): Promise<CallToolResult> => {
@@ -244,58 +249,51 @@ export function createSearchApiHandler(index: SearchIndexEntry[], log: LogFn) {
     const tokens = input.query.toLowerCase().trim().split(/\s+/).filter(Boolean);
     const limit = Math.min(input.limit ?? 10, 50);
 
-    const nameMatches:    SearchResult[] = [];
-    const summaryMatches: SearchResult[] = [];
-    const memberMatches:  SearchResult[] = [];
+    const results: SearchResult[] = [];
 
     for (const entry of index) {
       const typeLower    = entry.n.toLowerCase();
       const summaryLower = entry.s.toLowerCase();
       const membersLower = entry.m.map(m => m.toLowerCase());
 
-      // AND semantics: every token must appear somewhere in this entry
-      const allMatch = tokens.every(t =>
-        typeLower.includes(t) ||
-        summaryLower.includes(t) ||
-        membersLower.some(m => m.includes(t))
-      );
-      if (!allMatch) continue;
+      // Ranked/OR matching: a topic matching MORE tokens ranks higher, but matching
+      // just one token is still a hit — a full-sentence query no longer returns nothing
+      // just because one word isn't present anywhere in this entry.
+      const nameHits    = tokens.filter(t => typeLower.includes(t)).length;
+      const summaryHits = tokens.filter(t => summaryLower.includes(t)).length;
+      const memberHits  = tokens.filter(t => membersLower.some(m => m.includes(t))).length;
+      if (nameHits + summaryHits + memberHits === 0) continue;
 
-      if (tokens.every(t => typeLower.includes(t))) {
-        nameMatches.push({ typeName: entry.n, summary: entry.s, nugetPackage: entry.p, matchedOn: 'name' });
-      } else if (tokens.every(t => summaryLower.includes(t))) {
-        summaryMatches.push({ typeName: entry.n, summary: entry.s, nugetPackage: entry.p, matchedOn: 'summary' });
-      } else {
-        const matchedMembers = [...new Set(
-          tokens.flatMap(t => entry.m.filter(m => m.toLowerCase().includes(t)))
-        )];
-        memberMatches.push({
-          typeName: entry.n,
-          summary: entry.s,
-          nugetPackage: entry.p,
-          matchedOn: `members: ${matchedMembers.join(', ')}`,
-        });
-      }
+      const matchedOn = nameHits > 0
+        ? 'name'
+        : memberHits > 0
+          ? `members: ${[...new Set(tokens.flatMap(t => entry.m.filter(m => m.toLowerCase().includes(t))))].join(', ')}`
+          : 'summary';
+
+      // Name hits weighted highest, then members, then summary.
+      const score = nameHits * 4 + memberHits * 2 + summaryHits;
+      results.push({ typeName: entry.n, summary: entry.s, nugetPackage: entry.p, matchedOn, score });
     }
 
-    const totalFound = nameMatches.length + summaryMatches.length + memberMatches.length;
-    const results = [...nameMatches, ...summaryMatches, ...memberMatches].slice(0, limit);
+    results.sort((a, b) => b.score - a.score);
+    const totalFound = results.length;
+    const limited = results.slice(0, limit);
 
-    if (results.length === 0) {
+    if (limited.length === 0) {
       const hint = tokens.length > 1
         ? `It looks like you may be trying to verify specific members on a known type. Use get_wpf_api_reference("TypeName") instead — it returns the complete property, method, and event list so you can inspect it directly. Reserve search_wpf_api for discovery when you don't know the type name yet.`
-        : `Try a shorter keyword or call list_wpf_components to browse available controls.`;
-      const text = `No API entries found matching "${input.query}". ${hint}`;
+        : `Try a different keyword or call list_wpf_components to browse available controls.`;
+      const text = `No API entries found matching any word in "${input.query}". ${hint}`;
       log('search_wpf_api', input as Record<string, unknown>, text, Math.round(performance.now() - start));
       return { content: [{ type: 'text', text }], isError: true };
     }
 
-    const lines = results.map(r =>
+    const lines = limited.map(r =>
       `### ${r.typeName}\n- **Matched:** ${r.matchedOn}\n- **NuGet:** \`${r.nugetPackage}\`\n- ${r.summary || '_(no summary)_'}`
     );
 
     const text = [
-      `# WPF API Search: "${input.query}" (${results.length} of ${totalFound} matches)`,
+      `# WPF API Search: "${input.query}" (${limited.length} of ${totalFound} matches)`,
       '',
       ...lines,
       '',
@@ -303,6 +301,156 @@ export function createSearchApiHandler(index: SearchIndexEntry[], log: LogFn) {
     ].join('\n\n');
 
     log('search_wpf_api', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+    return { content: [{ type: 'text' as const, text }] };
+  };
+}
+
+// ── search_wpf_docs ───────────────────────────────────────────────────────────
+
+type DocSearchResult = DocIndexEntry & { matchedOn: string; score: number };
+
+export function createSearchDocsHandler(docIndex: DocIndexEntry[], log: LogFn) {
+  return async (input: { query?: string; control?: string; limit?: number }): Promise<CallToolResult> => {
+    const start = performance.now();
+    const tokens = (input.query ?? '').toLowerCase().trim().split(/\s+/).filter(Boolean);
+    const controlFilter = input.control?.toLowerCase().trim();
+    const limit = Math.min(input.limit ?? 10, 50);
+
+    if (tokens.length === 0 && !controlFilter) {
+      const text = `Provide at least one of \`query\` or \`control\`. Pass \`control\` alone to browse every topic for a component, or add \`query\` keywords to narrow further.`;
+      log('search_wpf_docs', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+      return { content: [{ type: 'text', text }], isError: true };
+    }
+
+    let controlMatchCount = 0;
+    const results: DocSearchResult[] = [];
+
+    for (const entry of docIndex) {
+      // Hard pre-filter: if a control name was given, the topic must reference it
+      if (controlFilter && !entry.controlNames.some(c => c.toLowerCase().includes(controlFilter))) {
+        continue;
+      }
+      if (controlFilter) controlMatchCount++;
+
+      if (tokens.length === 0) {
+        // Browse mode: control filter alone, no keyword ranking needed.
+        results.push({ ...entry, matchedOn: 'control name', score: 0 });
+        continue;
+      }
+
+      const titleLower    = entry.title.toLowerCase();
+      const controlsLower = entry.controlNames.join(' ').toLowerCase();
+      const tagsLower      = entry.tags.join(' ').toLowerCase();
+      const summaryLower   = entry.summary.toLowerCase();
+
+      // Ranked/OR matching: a topic matching MORE tokens ranks higher, but matching
+      // just one token is still a hit, so a longer natural-language query doesn't
+      // return nothing just because one word isn't present anywhere in the entry.
+      const titleHits   = tokens.filter(t => titleLower.includes(t)).length;
+      const controlHits = tokens.filter(t => controlsLower.includes(t)).length;
+      const tagHits      = tokens.filter(t => tagsLower.includes(t)).length;
+      const summaryHits  = tokens.filter(t => summaryLower.includes(t)).length;
+      if (titleHits + controlHits + tagHits + summaryHits === 0) continue;
+
+      const matchedOn = titleHits > 0 ? 'title' : controlHits > 0 ? 'control name' : tagHits > 0 ? 'tags' : 'summary';
+      const score = titleHits * 4 + controlHits * 3 + tagHits * 2 + summaryHits;
+      results.push({ ...entry, matchedOn, score });
+    }
+
+    results.sort((a, b) => b.score - a.score);
+    const totalFound = results.length;
+    const limited = results.slice(0, limit);
+
+    if (limited.length === 0) {
+      let text: string;
+      if (controlFilter && controlMatchCount === 0) {
+        text = `No indexed topics reference control "${input.control}". Check the exact name with list_wpf_components — the control filter is a substring match, so a typo or wrong casing of the underlying name returns nothing.`;
+      } else if (controlFilter) {
+        text = `${controlMatchCount} topic(s) reference control "${input.control}", but none matched any word in "${input.query}". Try fewer/simpler keywords, or call search_wpf_docs(control: "${input.control}") with no query to browse all ${controlMatchCount} topics for this component.`;
+      } else {
+        text = `No documentation topics found matching any word in "${input.query}". Try shorter or more general keywords (e.g. "getting started", "grouping", "pin pane"), or add \`control\` to browse a specific component's topics directly.`;
+      }
+      log('search_wpf_docs', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+      return { content: [{ type: 'text', text }], isError: true };
+    }
+
+    const lines = limited.map(r => [
+      `### ${r.title || r.slug}`,
+      `- **Topic slug:** \`${r.slug}\``,
+      `- **Matched on:** ${r.matchedOn}`,
+      `- **Controls:** ${r.controlNames.length ? r.controlNames.join(', ') : '_(none listed)_'}`,
+      `- **Tags:** ${r.tags.length ? r.tags.join(', ') : '_(none)_'}`,
+      `- ${r.summary || '_(no summary)_'}`,
+    ].join('\n'));
+
+    const queryLabel = input.query ? `"${input.query}"` : '(browsing by control)';
+    const text = [
+      `# WPF Documentation Search: ${queryLabel} (${limited.length} of ${totalFound} matches)`,
+      '',
+      ...lines,
+      '',
+      `_Call \`get_wpf_doc\` with any topic slug above to retrieve the full text and XAML code samples._`,
+    ].join('\n\n');
+
+    log('search_wpf_docs', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+    return { content: [{ type: 'text' as const, text }] };
+  };
+}
+
+// ── get_wpf_doc ───────────────────────────────────────────────────────────────
+
+const MAX_BODY_CHARS    = 6000;
+const MAX_SNIPPETS_SHOWN = 6;
+const MAX_SNIPPET_CHARS  = 3000;
+
+export function createGetDocHandler(docIndex: DocIndexEntry[], log: LogFn) {
+  return async (input: { topic: string }): Promise<CallToolResult> => {
+    const start = performance.now();
+    const { topic } = input;
+
+    const doc = loadDoc(topic);
+    if (!doc) {
+      const suggestions = docIndex
+        .filter(e => e.slug.toLowerCase().includes(topic.toLowerCase()) || e.title.toLowerCase().includes(topic.toLowerCase()))
+        .slice(0, 5)
+        .map(e => `\`${e.slug}\``);
+      const hint = suggestions.length > 0
+        ? ` Did you mean: ${suggestions.join(', ')}?`
+        : ` Call \`search_wpf_docs\` with a keyword to find the correct topic slug.`;
+      const text = `Documentation topic "${topic}" not found.${hint}`;
+      log('get_wpf_doc', input, text, Math.round(performance.now() - start));
+      return { content: [{ type: 'text', text }], isError: true };
+    }
+
+    const out: string[] = [
+      `# ${doc.title || doc.slug}`,
+      '',
+      `**Topic slug:** \`${doc.slug}\``,
+      `**Source:** ${doc.source === 'wpf' ? 'docs-wpf' : 'docs-common (shared cross-platform topic)'}`,
+      `**Controls:** ${doc.controlNames.length ? doc.controlNames.join(', ') : '_(none listed)_'}`,
+      `**Tags:** ${doc.tags.length ? doc.tags.join(', ') : '_(none)_'}`,
+    ];
+
+    if (doc.xamlSnippets.length > 0) {
+      out.push('', '## XAML Examples');
+      const shown = doc.xamlSnippets.slice(0, MAX_SNIPPETS_SHOWN);
+      shown.forEach((snippet, i) => {
+        const truncated = snippet.length > MAX_SNIPPET_CHARS;
+        const text = truncated ? `${snippet.slice(0, MAX_SNIPPET_CHARS)}\n<!-- truncated, ${snippet.length} chars total -->` : snippet;
+        out.push('', `### Example ${i + 1}`, '```xml', text, '```');
+      });
+      const remaining = doc.xamlSnippets.length - shown.length;
+      if (remaining > 0) out.push('', `_${remaining} additional XAML example(s) omitted for brevity._`);
+    } else {
+      out.push('', '_This topic has no extracted XAML code samples — see body text below for conceptual guidance._');
+    }
+
+    const bodyTruncated = doc.body.length > MAX_BODY_CHARS;
+    const body = bodyTruncated ? `${doc.body.slice(0, MAX_BODY_CHARS)}\n\n_(truncated, ${doc.body.length} chars total)_` : doc.body;
+    out.push('', '## Full Topic Text', '', body);
+
+    const text = out.join('\n');
+    log('get_wpf_doc', input, text, Math.round(performance.now() - start));
     return { content: [{ type: 'text' as const, text }] };
   };
 }

@@ -157,6 +157,8 @@ export interface ApiEntry {
   dotnetNamespace: string;
   summary: string;
   remarks: string;
+  /** Immediate base type name, if it is also an indexed Infragistics type. */
+  baseType?: string;
   properties: ApiMemberEntry[];
   events:     ApiMemberEntry[];
   methods:    ApiMemberEntry[];
@@ -210,7 +212,13 @@ function loadTypeInfo(): Record<string, TypeInfoEntry | string> {
   return result;
 }
 
-/** Second pass: enrich entries in-memory with inherited Infragistics properties. */
+/**
+ * Second pass: enrich every entry in-memory with inherited Infragistics members.
+ * This walks the full base-type chain generically for ALL indexed types (properties,
+ * events, and methods) — no per-component special-casing required. It also records
+ * the immediate `baseType` on each entry so tools/descriptions can point callers to
+ * the right base class dynamically instead of hardcoding examples.
+ */
 function enrichWithInheritance(
   entries: Map<string, ApiEntry>,
   typeInfo: Record<string, TypeInfoEntry | string>
@@ -218,9 +226,14 @@ function enrichWithInheritance(
   let enriched = 0;
 
   for (const [typeName, entry] of entries) {
+    const immediateBase = typeInfo[`${typeName}.__baseType`];
+    if (typeof immediateBase === 'string') entry.baseType = immediateBase;
+
     if (!(`${typeName}.__baseType` in typeInfo)) continue;
 
-    const knownProps = new Set(entry.properties.map(p => p.name));
+    const knownProps  = new Set(entry.properties.map(p => p.name));
+    const knownEvents = new Set(entry.events.map(e => e.name));
+    const knownMethods = new Set(entry.methods.map(m => m.name));
     const visited = new Set<string>([typeName]);
     let added = false;
     let current = typeName;
@@ -237,6 +250,16 @@ function enrichWithInheritance(
       for (const p of baseEntry.properties.filter(p => !p.declaredOn && !knownProps.has(p.name))) {
         entry.properties.push({ ...p, declaredOn: base });
         knownProps.add(p.name);
+        added = true;
+      }
+      for (const e of baseEntry.events.filter(e => !e.declaredOn && !knownEvents.has(e.name))) {
+        entry.events.push({ ...e, declaredOn: base });
+        knownEvents.add(e.name);
+        added = true;
+      }
+      for (const m of baseEntry.methods.filter(m => !m.declaredOn && !knownMethods.has(m.name))) {
+        entry.methods.push({ ...m, declaredOn: base });
+        knownMethods.add(m.name);
         added = true;
       }
       current = base;

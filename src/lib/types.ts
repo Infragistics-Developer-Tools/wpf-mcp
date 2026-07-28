@@ -27,6 +27,8 @@ export interface ApiEntry {
   dotnetNamespace: string;
   summary: string;
   remarks: string;
+  /** Immediate base type name, if it is also an indexed Infragistics type. Drives generic "check the base class" guidance. */
+  baseType?: string;
   properties: ApiMemberEntry[];
   events:     ApiMemberEntry[];
   methods:    ApiMemberEntry[];
@@ -39,4 +41,22 @@ export interface SearchIndexEntry {
   a: string;   // assembly
   p: string;   // nugetPackage
   m: string[]; // member names (props + events + methods)
+}
+
+// ── Docs types ────────────────────────────────────────────────────────────────
+
+/** Lightweight entry in docs-index.json — loaded once at startup */
+export interface DocIndexEntry {
+  slug:         string;    // e.g. "xamdockmanager-add-content-to-a-contentpane"
+  title:        string;    // e.g. "Add Content to a ContentPane"
+  controlNames: string[];  // e.g. ["xamDockManager"]
+  tags:         string[];  // e.g. ["How Do I", "Getting Started"]
+  source:       'wpf' | 'common';
+  summary:      string;    // first ~220 chars of plain body text
+}
+
+/** Full topic — loaded on demand from docs/{slug}.json */
+export interface DocEntry extends DocIndexEntry {
+  body:         string;    // full stripped text (code block content as plain text)
+  xamlSnippets: string[];  // extracted XAML-only code blocks in document order
 }
