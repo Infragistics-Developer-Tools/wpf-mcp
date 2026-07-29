@@ -15,8 +15,9 @@
     "generate:types": "dotnet run --project scripts/type-extractor/TypeExtractor.csproj -- nuget/packages nuget/type-info.json",
     "generate": "npm run docs:restore && npm run generate:types && npx tsx scripts/build-api.ts",
     "build:docs": "npx tsx scripts/build-docs.ts",
-    "docs:update": "git submodule update --remote docs/docs-wpf docs/docs-common",
-    "build:all": "npm run generate && npm run build:docs && npm run build",
+    "build:themes": "npx tsx scripts/build-themes.ts",
+    "docs:update": "git submodule update --remote docs/docs-wpf docs/docs-common docs/wpf-resources",
+    "build:all": "npm run generate && npm run build:docs && npm run build:themes && npm run build",
     "inspector": "npx @modelcontextprotocol/inspector node dist/index.js"
   },
   "engines": {

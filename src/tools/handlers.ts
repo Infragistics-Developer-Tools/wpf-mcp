@@ -1,7 +1,8 @@
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { loadApiDoc } from '../lib/api-doc-loader.js';
 import { loadDoc } from '../lib/docs-loader.js';
-import type { ComponentEntry, SearchIndexEntry, DocIndexEntry } from '../lib/types.js';
+import { loadThemeResource } from '../lib/theme-loader.js';
+import type { ComponentEntry, SearchIndexEntry, DocIndexEntry, ThemeIndex, ThemeResourceFile } from '../lib/types.js';
 
 type LogFn = (tool: string, input: Record<string, unknown>, output: string, ms: number) => void;
 
@@ -451,6 +452,164 @@ export function createGetDocHandler(docIndex: DocIndexEntry[], log: LogFn) {
 
     const text = out.join('\n');
     log('get_wpf_doc', input, text, Math.round(performance.now() - start));
+    return { content: [{ type: 'text' as const, text }] };
+  };
+}
+
+// ── list_wpf_themes ───────────────────────────────────────────────────────────
+
+const NEWER_MECHANISM_LINE =
+  '_Newer family (`Themes/`): apply via `Infragistics.Themes.ThemeManager.ApplicationTheme = new <Name>Theme();` in App.xaml.cs (requires the `Infragistics.WPF.Themes.<Name>.Trial` NuGet package). Do NOT merge these files directly into `Application.Resources`._';
+
+const LEGACY_MECHANISM_LINE =
+  '_Legacy family (`DefaultStyles/`): the named theme is already embedded in the component\'s assembly — just set `Theme="<Name>"` on the control. Use these files only to copy/override individual Styles/ControlTemplates._';
+
+const THEME_MECHANISM_GUIDE = [
+  '## How to apply a theme',
+  '',
+  LEGACY_MECHANISM_LINE,
+  '',
+  NEWER_MECHANISM_LINE,
+].join('\n');
+
+function formatResourceFiles(files: ThemeResourceFile[], limit: number): string[] {
+  const shown = files.slice(0, limit);
+  const lines = shown.map(f => `  - \`${f.path}\``);
+  const remaining = files.length - shown.length;
+  if (remaining > 0) lines.push(`  - _...and ${remaining} more file(s) — narrow further with \`component\` and/or \`theme\` to see them_`);
+  return lines;
+}
+
+export function createListWpfThemesHandler(themeIndex: ThemeIndex, log: LogFn) {
+  return async (input: { component?: string; theme?: string }): Promise<CallToolResult> => {
+    const start = performance.now();
+    const { component, theme } = input;
+    const componentFilter = component?.toLowerCase().trim();
+    const themeFilter = theme?.toLowerCase().trim();
+
+    const out: string[] = [];
+
+    if (!componentFilter && !themeFilter) {
+      // Browse mode — summarize everything available.
+      out.push(`# Available WPF Themes`, '');
+      out.push('## Newer family (ThemeManager) — theme names');
+      themeIndex.newerThemes.forEach(t => out.push(`- **${t.theme}** (${t.files.length} file${t.files.length === 1 ? '' : 's'})`));
+      out.push('', '## Legacy family (Theme="..." property) — style folders');
+      themeIndex.legacyStyles.forEach(s => out.push(`- **${s.folder}** (${s.files.length} file${s.files.length === 1 ? '' : 's'})`));
+      out.push('', THEME_MECHANISM_GUIDE);
+      out.push('', '_Pass `component` and/or `theme` to filter down to exact file paths, then call get_wpf_theme_resource(path) to read one._');
+      const text = out.join('\n');
+      log('list_wpf_themes', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+      return { content: [{ type: 'text' as const, text }] };
+    }
+
+    const matchedNewer = themeIndex.newerThemes
+      .filter(t => !themeFilter || t.theme.toLowerCase().includes(themeFilter))
+      .map(t => ({ theme: t.theme, files: t.files.filter(f => !componentFilter || f.file.toLowerCase().includes(componentFilter)) }))
+      .filter(t => t.files.length > 0);
+
+    const matchedLegacy = themeIndex.legacyStyles
+      .filter(s => !componentFilter || s.folder.toLowerCase().includes(componentFilter))
+      .map(s => ({ folder: s.folder, files: s.files.filter(f => !themeFilter || f.file.toLowerCase().includes(themeFilter)) }))
+      .filter(s => s.files.length > 0);
+
+    if (matchedNewer.length === 0 && matchedLegacy.length === 0) {
+      const text = `No theme resource files matched component="${component ?? ''}" theme="${theme ?? ''}". Call list_wpf_themes with no arguments to browse all available theme names and style folders.`;
+      log('list_wpf_themes', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+      return { content: [{ type: 'text', text }], isError: true };
+    }
+
+    const totalFiles =
+      matchedNewer.reduce((n, t) => n + t.files.length, 0) +
+      matchedLegacy.reduce((n, s) => n + s.files.length, 0);
+
+    out.push(`# WPF Theme Resources${component ? ` — component: "${component}"` : ''}${theme ? ` — theme: "${theme}"` : ''} (${totalFiles} file${totalFiles === 1 ? '' : 's'})`);
+
+    if (matchedNewer.length > 0) {
+      out.push('', '## Newer family (ThemeManager)');
+      for (const t of matchedNewer) {
+        out.push('', `### ${t.theme}`, ...formatResourceFiles(t.files, 20));
+      }
+    }
+
+    if (matchedLegacy.length > 0) {
+      out.push('', '## Legacy family (Theme="..." property)');
+      for (const s of matchedLegacy) {
+        out.push('', `### ${s.folder}`, ...formatResourceFiles(s.files, 20));
+      }
+    }
+
+    // Family-specific mechanism reminder (avoids dumping both mechanisms when only one is relevant).
+    const mechanismLines: string[] = [];
+    if (matchedLegacy.length > 0) mechanismLines.push(LEGACY_MECHANISM_LINE);
+    if (matchedNewer.length > 0) mechanismLines.push(NEWER_MECHANISM_LINE);
+    out.push('', ...mechanismLines);
+
+    // If the filter narrowed to exactly one file, spell out the ready-to-use next call.
+    if (totalFiles === 1) {
+      const singlePath =
+        matchedNewer[0]?.files[0]?.path ?? matchedLegacy[0]?.files[0]?.path ?? '';
+      out.push('', `_Exactly one file matched — call \`get_wpf_theme_resource("${singlePath}")\` to read its XAML content._`);
+    } else {
+      out.push('', '_Call `get_wpf_theme_resource(path)` with any path above to read the full XAML content._');
+    }
+
+    const text = out.join('\n');
+    log('list_wpf_themes', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+    return { content: [{ type: 'text' as const, text }] };
+  };
+}
+
+// ── get_wpf_theme_resource ────────────────────────────────────────────────────
+
+// Style files average ~60KB and can reach ~660KB; 8000 chars was well below one
+// full ControlTemplate. 24000 fits ~5-6k tokens — room for real content while
+// still capping the largest blobs.
+const MAX_THEME_FILE_CHARS = 24000;
+
+export function createGetWpfThemeResourceHandler(themeIndex: ThemeIndex, log: LogFn) {
+  return async (input: { path: string }): Promise<CallToolResult> => {
+    const start = performance.now();
+    const { path } = input;
+
+    const content = loadThemeResource(path);
+    if (content === null) {
+      const needle = path.split(/[\\/]/).pop()?.toLowerCase() ?? '';
+      const allFiles = [
+        ...themeIndex.newerThemes.flatMap(t => t.files),
+        ...themeIndex.legacyStyles.flatMap(s => s.files),
+      ];
+      const suggestions = allFiles
+        .filter(f => f.file.toLowerCase().includes(needle))
+        .slice(0, 5)
+        .map(f => `\`${f.path}\``);
+      const hint = suggestions.length > 0
+        ? ` Did you mean: ${suggestions.join(', ')}?`
+        : ` Call list_wpf_themes to browse available paths — never guess this path.`;
+      const text = `Theme resource "${path}" not found.${hint}`;
+      log('get_wpf_theme_resource', input, text, Math.round(performance.now() - start));
+      return { content: [{ type: 'text', text }], isError: true };
+    }
+
+    const isNewerFamily = path.replace(/\\/g, '/').startsWith('Themes/');
+    const mechanismNote = isNewerFamily
+      ? '_Newer family: apply via `Infragistics.Themes.ThemeManager.ApplicationTheme = new <Name>Theme();` — do not merge this file directly into Application.Resources._'
+      : '_Legacy family: the named theme is already embedded in the component assembly — set `Theme="..."` on the control. Use this file to copy/override specific styles only._';
+
+    const truncated = content.length > MAX_THEME_FILE_CHARS;
+    const shown = truncated ? `${content.slice(0, MAX_THEME_FILE_CHARS)}\n<!-- truncated, ${content.length} chars total -->` : content;
+
+    const text = [
+      `# ${path}`,
+      '',
+      mechanismNote,
+      '',
+      '```xml',
+      shown,
+      '```',
+    ].join('\n');
+
+    log('get_wpf_theme_resource', input, text, Math.round(performance.now() - start));
     return { content: [{ type: 'text' as const, text }] };
   };
 }

@@ -94,6 +94,32 @@ export const getDocSchema = {
       Case-insensitive.`),
 };
 
+export const listWpfThemesSchema = {
+  component: z
+    .string()
+    .max(64)
+    .optional()
+    .describe(`Optional component/keyword filter, e.g. "XamDataGrid", "Ribbon", "DataChart", "DockManager".
+      Case-insensitive substring match against legacy style folder names and per-control theme file names.
+      Omit to list every available theme name and legacy style folder with a file count.`),
+  theme: z
+    .string()
+    .max(64)
+    .optional()
+    .describe(`Optional theme name filter, e.g. "MetroDark", "RoyalDark", "Office2013", "Metro".
+      Case-insensitive substring match. Combine with \`component\` to find one exact file.`),
+};
+
+export const getWpfThemeResourceSchema = {
+  path: z
+    .string()
+    .min(1)
+    .max(200)
+    .describe(`The exact resource path returned by list_wpf_themes, e.g.
+      "Themes/MetroDark/MetroDark.xamDataChart.xaml" or "DefaultStyles/Ribbon/RibbonMetroDark.xaml".
+      Call list_wpf_themes first — never guess this path.`),
+};
+
 
 export type GetApiReferenceInput = {
   component: string;

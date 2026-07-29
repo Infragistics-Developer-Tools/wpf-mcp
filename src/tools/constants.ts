@@ -45,5 +45,18 @@ Returns a ranked list of matching topics with slug, title, controls, tags, and a
 Use the exact slug returned by search_wpf_docs — this is always the last step of the discovery chain (list_wpf_components/search_wpf_api → get_wpf_api_reference → search_wpf_docs → get_wpf_doc), never the first call in a session. Returns the topic title, associated control names, tags, up to 6 XAML code samples (verified working examples from Infragistics' official docs), and the full descriptive body text.
 
 Call this before writing XAML or giving configuration/usage advice for any control whose behavior isn't already confirmed by an existing working example — this is the most effective way to avoid build errors from guessed property names, runtime errors from invalid nesting, and incorrect advice on styling, data binding, performance, or any other topic covered by the docs.`,
+
+  list_wpf_themes: `List available Infragistics WPF named themes and the raw XAML style/resource-dictionary files backing them, sourced directly from the official Infragistics/wpf-resources repository. Covers BOTH theming mechanisms used across the product — they are NOT interchangeable, always check which one applies before writing code:
+
+  1. Legacy "Infragistics.Windows.*" family (XamDataGrid/XamDataPresenter, XamRibbon, XamDockManager, XamTabControl, etc.) — named themes (MetroDark, RoyalDark, Office2013, ...) ship embedded as BAML **inside the component's own assembly**. Apply out-of-the-box by simply setting \`Theme="MetroDark"\` on the control — no package or merge needed. The matching files under \`DefaultStyles/{Folder}/\` are for *customizing*: copy the relevant Style/ControlTemplate and override just what you need.
+  2. Newer "Infragistics.Controls.*" family (charts, gauges, and other newer controls) — themes are NOT embedded; apply via a separate \`Infragistics.WPF.Themes.<Name>.Trial\` NuGet package plus \`Infragistics.Themes.ThemeManager.ApplicationTheme = new <Name>Theme();\` in App.xaml.cs (do NOT manually merge the \`Themes/{ThemeName}/\` files into Application.Resources — that throws a runtime XamlParseException). The matching files under \`Themes/{ThemeName}/\` are for inspecting/customizing the exact brushes and templates that theme applies.
+
+Call this FIRST for any styling/theming task — before writing XAML, before advising which mechanism applies, and before calling get_wpf_theme_resource. Pass \`component\` and/or \`theme\` to filter; omit both to see the full list of theme names and legacy style folders. Returns exact \`path\` values — reuse them verbatim in get_wpf_theme_resource(path) to read the actual XAML content.`,
+
+  get_wpf_theme_resource: `Retrieve the full raw XAML content of one theme/style resource-dictionary file from the official Infragistics/wpf-resources repository — real Style/ControlTemplate/brush definitions, not summarized.
+
+Use the exact \`path\` returned by list_wpf_themes (e.g. "Themes/MetroDark/MetroDark.xamDataChart.xaml" or "DefaultStyles/Ribbon/RibbonMetroDark.xaml") — never guess this path. This is always the second step after list_wpf_themes, never the first call.
+
+Use this when the user wants to customize/override part of a control's themed appearance (copy the real Style/ControlTemplate as a starting point instead of guessing property names or template structure), or wants to see exactly what a named theme changes for a given control. Large files are truncated with a note — ask for a narrower/more specific file via list_wpf_themes if you need a part that got cut off.`,
 };
 

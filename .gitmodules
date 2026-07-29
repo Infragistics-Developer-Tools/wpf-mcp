@@ -4,3 +4,6 @@
 [submodule "docs/docs-common"]
 	path = docs/docs-common
 	url = https://github.com/Infragistics/docs-common
+[submodule "docs/wpf-resources"]
+	path = docs/wpf-resources
+	url = https://github.com/Infragistics/wpf-resources

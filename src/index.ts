@@ -6,9 +6,9 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 import { TOOL_DESCRIPTIONS } from './tools/constants.js';
-import { listComponentsSchema, getApiReferenceSchema, searchApiSchema, getProjectScaffoldSchema, searchDocsSchema, getDocSchema } from './tools/schemas.js';
-import { createListComponentsHandler, createGetApiReferenceHandler, createSearchApiHandler, createGetProjectScaffoldHandler, createSearchDocsHandler, createGetDocHandler } from './tools/handlers.js';
-import type { ComponentEntry, SearchIndexEntry, DocIndexEntry } from './lib/types.js';
+import { listComponentsSchema, getApiReferenceSchema, searchApiSchema, getProjectScaffoldSchema, searchDocsSchema, getDocSchema, listWpfThemesSchema, getWpfThemeResourceSchema } from './tools/schemas.js';
+import { createListComponentsHandler, createGetApiReferenceHandler, createSearchApiHandler, createGetProjectScaffoldHandler, createSearchDocsHandler, createGetDocHandler, createListWpfThemesHandler, createGetWpfThemeResourceHandler } from './tools/handlers.js';
+import type { ComponentEntry, SearchIndexEntry, DocIndexEntry, ThemeIndex } from './lib/types.js';
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
@@ -19,6 +19,9 @@ const searchIndex: SearchIndexEntry[] = require('./data/search-index.json');
 const docIndex: DocIndexEntry[] = existsSync(join(__dirname, 'data/docs-index.json'))
   ? require('./data/docs-index.json')
   : [];
+const themeIndex: ThemeIndex = existsSync(join(__dirname, 'data/theme-index.json'))
+  ? require('./data/theme-index.json')
+  : { newerThemes: [], legacyStyles: [] };
 
 // ── Debug logging ─────────────────────────────────────────────────────────────
 
@@ -45,6 +48,7 @@ const server = new McpServer(
         3. Whenever the task needs HOW-TO guidance beyond "what members exist" — layouts/nesting, styling/theming, data binding, editing/validation, filtering/sorting/grouping/summaries, exporting, performance, commands, known issues, etc. — call search_wpf_docs(query, control: component), passing the SAME component name from step 1/2 to scope the search.
         4. get_wpf_doc(slug) on the most relevant result from step 3 to read the full XAML example or how-to text before writing any code or giving usage advice.
         5. For new projects, get_project_scaffold(components) after step 1 for dotnet CLI + xmlns setup, then still run steps 2-4 per component before writing real XAML.
+        6. For styling/theming tasks specifically: call list_wpf_themes(component?, theme?) to see which of the two theming mechanisms applies and get exact resource file paths, then get_wpf_theme_resource(path) to read the real XAML before writing any Style/ControlTemplate overrides.
 
       ALWAYS call list_wpf_components/search_wpf_api before writing any XAML to get the correct xmlns namespace URI; wrong values cause immediate compile errors.
       Never guess property names, child-element nesting, or other usage details (styling, data binding, performance, etc.) — verify through this chain rather than assuming from a similar control or from naming conventions.
@@ -112,6 +116,26 @@ server.registerTool(
     inputSchema: getDocSchema,
   },
   createGetDocHandler(docIndex, log)
+);
+
+server.registerTool(
+  'list_wpf_themes',
+  {
+    description: TOOL_DESCRIPTIONS.list_wpf_themes,
+    annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
+    inputSchema: listWpfThemesSchema,
+  },
+  createListWpfThemesHandler(themeIndex, log)
+);
+
+server.registerTool(
+  'get_wpf_theme_resource',
+  {
+    description: TOOL_DESCRIPTIONS.get_wpf_theme_resource,
+    annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
+    inputSchema: getWpfThemeResourceSchema,
+  },
+  createGetWpfThemeResourceHandler(themeIndex, log)
 );
 
 // ── Transport ─────────────────────────────────────────────────────────────────

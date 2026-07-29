@@ -60,3 +60,29 @@ export interface DocEntry extends DocIndexEntry {
   body:         string;    // full stripped text (code block content as plain text)
   xamlSnippets: string[];  // extracted XAML-only code blocks in document order
 }
+
+// ── Theme types ───────────────────────────────────────────────────────────────
+
+/** One theme/style XAML file, addressable by `path` in get_wpf_theme_resource */
+export interface ThemeResourceFile {
+  path: string; // e.g. "Themes/MetroDark/MetroDark.xamDataChart.xaml"
+  file: string; // filename only, e.g. "MetroDark.xamDataChart.xaml"
+}
+
+/** A named theme applied via Infragistics.Themes.ThemeManager (newer "Infragistics.Controls.*" family) */
+export interface NewerThemeEntry {
+  theme: string; // e.g. "MetroDark"
+  files: ThemeResourceFile[];
+}
+
+/** A component's embedded-BAML themes (older "Infragistics.Windows.*" family, applied via Theme="..." property) */
+export interface LegacyStyleEntry {
+  folder: string; // e.g. "Ribbon"
+  files: ThemeResourceFile[];
+}
+
+/** theme-index.json — loaded once at startup */
+export interface ThemeIndex {
+  newerThemes: NewerThemeEntry[];
+  legacyStyles: LegacyStyleEntry[];
+}
