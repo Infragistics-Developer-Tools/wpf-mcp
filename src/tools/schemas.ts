@@ -100,7 +100,8 @@ export const listWpfThemesSchema = {
     .max(64)
     .optional()
     .describe(`Optional component/keyword filter, e.g. "XamDataGrid", "Ribbon", "DataChart", "DockManager".
-      Case-insensitive substring match against legacy style folder names and per-control theme file names.
+      Case-insensitive substring match against legacy style folder names AND per-control theme file names
+      (both families) — so you can filter by a control folder ("Ribbon") or by a specific file name ("RibbonMetroDark").
       Omit to list every available theme name and legacy style folder with a file count.`),
   theme: z
     .string()

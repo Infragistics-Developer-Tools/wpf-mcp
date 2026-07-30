@@ -509,8 +509,18 @@ export function createListWpfThemesHandler(themeIndex: ThemeIndex, log: LogFn) {
       .filter(t => t.files.length > 0);
 
     const matchedLegacy = themeIndex.legacyStyles
-      .filter(s => !componentFilter || s.folder.toLowerCase().includes(componentFilter))
-      .map(s => ({ folder: s.folder, files: s.files.filter(f => !themeFilter || f.file.toLowerCase().includes(themeFilter)) }))
+      .map(s => {
+        // `component` matches either the style folder (e.g. "Ribbon" → whole folder) or an
+        // individual file name (e.g. "RibbonMetroDark" → that one file); `theme` matches file names.
+        const folderMatchesComponent = !componentFilter || s.folder.toLowerCase().includes(componentFilter);
+        const files = s.files.filter(f => {
+          const nameLower = f.file.toLowerCase();
+          const componentOk = folderMatchesComponent || nameLower.includes(componentFilter ?? '');
+          const themeOk = !themeFilter || nameLower.includes(themeFilter);
+          return componentOk && themeOk;
+        });
+        return { folder: s.folder, files };
+      })
       .filter(s => s.files.length > 0);
 
     if (matchedNewer.length === 0 && matchedLegacy.length === 0) {
