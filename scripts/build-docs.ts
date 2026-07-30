@@ -47,7 +47,24 @@ const COMMON_INCLUDE = new Set([
 
 function loadWpfVariables(): Map<string, string> {
   const vars = new Map<string, string>();
-  if (!existsSync(DOCS_CONFIG_FILE)) return vars;
+  if (!existsSync(DOCS_CONFIG_FILE)) {
+    // If docs-common is already on disk, the missing config is a real problem:
+    // every shared topic placeholder ({DataGridName}, {CategoryChartName}, …) would
+    // be stripped to an empty string and search_wpf_docs would return zero results
+    // for all those controls. Fail loudly so the broken index is never committed.
+    if (existsSync(DOCS_COMMON_DIR)) {
+      throw new Error(
+        `\n❌  DocsConfig.xml not found at:\n    ${DOCS_CONFIG_FILE}\n\n` +
+        `docs/docs-common is present, but without DocsConfig.xml every shared topic\n` +
+        `placeholder (e.g. {DataGridName}) resolves to an empty string, so\n` +
+        `search_wpf_docs returns zero results for most controls.\n\n` +
+        `Fix: ensure the submodule was initialised and is at a commit that includes\n` +
+        `DocsConfig.xml:\n` +
+        `    git submodule update --init --recursive\n`
+      );
+    }
+    return vars; // docs-common not present either — discoverFiles() will warn separately
+  }
 
   const xml = readFileSync(DOCS_CONFIG_FILE, 'utf-8');
   const tagRe = /<Variable\s+([^>]*?)\/>/g;
