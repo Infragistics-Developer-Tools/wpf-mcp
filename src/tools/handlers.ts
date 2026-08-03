@@ -464,7 +464,7 @@ export function createGetDocHandler(docIndex: DocIndexEntry[], log: LogFn) {
   };
 }
 
-// ── list_wpf_themes ───────────────────────────────────────────────────────────
+// ── setup_wpf_theme ───────────────────────────────────────────────────────────
 
 const NEWER_MECHANISM_LINE =
   '_Newer family (`Themes/`): apply via `Infragistics.Themes.ThemeManager.ApplicationTheme = new <Name>Theme();` in App.xaml.cs (requires the `Infragistics.WPF.Themes.<Name>.Trial` NuGet package). Do NOT merge these files directly into `Application.Resources`._';
@@ -478,7 +478,40 @@ const THEME_MECHANISM_GUIDE = [
   LEGACY_MECHANISM_LINE,
   '',
   NEWER_MECHANISM_LINE,
+  '',
+  '**Newer-family apply template (replace `<Name>` with the theme):**',
+  '```sh',
+  'dotnet add package Infragistics.WPF.Themes.<Name>.Trial',
+  '```',
+  '```csharp',
+  '// App.xaml.cs — set before the first window is created',
+  'Infragistics.Themes.ThemeManager.ApplicationTheme = new Infragistics.Themes.<Name>Theme();',
+  '```',
 ].join('\n');
+
+/**
+ * Complete, ready-to-paste apply block for one newer-family (ThemeManager) theme —
+ * NuGet package line + App.xaml.cs boilerplate — so applying a theme is fewer steps
+ * than hand-authoring brushes.
+ */
+function newerApplyBlock(theme: string): string {
+  return [
+    '',
+    `**Apply \`${theme}\` (ready to paste):**`,
+    '```sh',
+    `dotnet add package Infragistics.WPF.Themes.${theme}.Trial`,
+    '```',
+    '```csharp',
+    '// App.xaml.cs — set before the first window is created',
+    'protected override void OnStartup(StartupEventArgs e)',
+    '{',
+    `    Infragistics.Themes.ThemeManager.ApplicationTheme = new Infragistics.Themes.${theme}Theme();`,
+    '    base.OnStartup(e);',
+    '}',
+    '```',
+    '_Covers the newer "Infragistics.Controls.*" family (charts, gauges, maps, XamGrid, etc.)._',
+  ].join('\n');
+}
 
 function formatResourceFiles(files: ThemeResourceFile[], limit: number): string[] {
   const shown = files.slice(0, limit);
@@ -507,7 +540,7 @@ export function createListWpfThemesHandler(themeIndex: ThemeIndex, log: LogFn) {
       out.push('', THEME_MECHANISM_GUIDE);
       out.push('', '_Pass `component` and/or `theme` to filter down to exact file paths, then call get_wpf_theme_resource(path) to read one._');
       const text = out.join('\n');
-      log('list_wpf_themes', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+      log('setup_wpf_theme', input as Record<string, unknown>, text, Math.round(performance.now() - start));
       return { content: [{ type: 'text' as const, text }] };
     }
 
@@ -532,8 +565,8 @@ export function createListWpfThemesHandler(themeIndex: ThemeIndex, log: LogFn) {
       .filter(s => s.files.length > 0);
 
     if (matchedNewer.length === 0 && matchedLegacy.length === 0) {
-      const text = `No theme resource files matched component="${component ?? ''}" theme="${theme ?? ''}". Call list_wpf_themes with no arguments to browse all available theme names and style folders.`;
-      log('list_wpf_themes', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+      const text = `No theme resource files matched component="${component ?? ''}" theme="${theme ?? ''}". Call setup_wpf_theme with no arguments to browse all available theme names and style folders.`;
+      log('setup_wpf_theme', input as Record<string, unknown>, text, Math.round(performance.now() - start));
       return { content: [{ type: 'text', text }], isError: true };
     }
 
@@ -547,6 +580,7 @@ export function createListWpfThemesHandler(themeIndex: ThemeIndex, log: LogFn) {
       out.push('', '## Newer family (ThemeManager)');
       for (const t of matchedNewer) {
         out.push('', `### ${t.theme}`, ...formatResourceFiles(t.files, 20));
+        out.push(newerApplyBlock(t.theme));
       }
     }
 
@@ -573,7 +607,7 @@ export function createListWpfThemesHandler(themeIndex: ThemeIndex, log: LogFn) {
     }
 
     const text = out.join('\n');
-    log('list_wpf_themes', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+    log('setup_wpf_theme', input as Record<string, unknown>, text, Math.round(performance.now() - start));
     return { content: [{ type: 'text' as const, text }] };
   };
 }
@@ -603,7 +637,7 @@ export function createGetWpfThemeResourceHandler(themeIndex: ThemeIndex, log: Lo
         .map(f => `\`${f.path}\``);
       const hint = suggestions.length > 0
         ? ` Did you mean: ${suggestions.join(', ')}?`
-        : ` Call list_wpf_themes to browse available paths — never guess this path.`;
+        : ` Call setup_wpf_theme to browse available paths — never guess this path.`;
       const text = `Theme resource "${path}" not found.${hint}`;
       log('get_wpf_theme_resource', input, text, Math.round(performance.now() - start));
       return { content: [{ type: 'text', text }], isError: true };
@@ -704,7 +738,7 @@ const PALETTE_GUIDANCE = [
   '',
   '⚠️ **Load-order matters.** The theme references these colors from compiled BAML primitives via `StaticResource` (resolved once at parse time), so merging an override dictionary *after* the theme has already loaded may NOT recolor already-styled controls. Merge your override so it is present BEFORE `ThemeManager.ApplicationTheme` is set / before the first themed window is created (e.g. in `App.xaml.cs` before `base.OnStartup`).',
   '',
-  '⚠️ **Newer family only.** Legacy "Infragistics.Windows.*" controls (XamDataGrid, XamRibbon, XamDockManager, ...) do NOT read this palette — their themes are embedded BAML applied via `Theme="..."`. Recolor those by copying individual Styles/ControlTemplates (see `list_wpf_themes` / `get_wpf_theme_resource`).',
+  '⚠️ **Newer family only.** Legacy "Infragistics.Windows.*" controls (XamDataGrid, XamRibbon, XamDockManager, ...) do NOT read this palette — their themes are embedded BAML applied via `Theme="..."`. Recolor those by copying individual Styles/ControlTemplates (see `setup_wpf_theme` / `get_wpf_theme_resource`).',
   '',
   '_This is a read-only introspection tool — it returns the real keys/values and a skeleton to copy; it does not modify your project._',
 ].join('\n');
@@ -751,7 +785,7 @@ export function createGetWpfThemePaletteHandler(themeIndex: ThemeIndex, log: Log
 
     if (!match) {
       const names = available.map(t => `\`${t.theme}\``).join(', ');
-      const text = `No re-tunable palette found for theme "${theme}". Themes with a color palette (newer ThemeManager family): ${names}. Call list_wpf_themes to browse all themes and style folders.`;
+      const text = `No re-tunable palette found for theme "${theme}". Themes with a color palette (newer ThemeManager family): ${names}. Call setup_wpf_theme to browse all themes and style folders.`;
       log('get_wpf_theme_palette', input as Record<string, unknown>, text, Math.round(performance.now() - start));
       return { content: [{ type: 'text', text }], isError: true };
     }

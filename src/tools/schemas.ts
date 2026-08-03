@@ -118,9 +118,9 @@ export const getWpfThemeResourceSchema = {
     .string()
     .min(1)
     .max(200)
-    .describe(`The exact resource path returned by list_wpf_themes, e.g.
+    .describe(`The exact resource path returned by setup_wpf_theme, e.g.
       "Themes/MetroDark/MetroDark.xamDataChart.xaml" or "DefaultStyles/Ribbon/RibbonMetroDark.xaml".
-      Call list_wpf_themes first — never guess this path.`),
+      Call setup_wpf_theme first — never guess this path.`),
 };
 
 export const getWpfThemePaletteSchema = {
