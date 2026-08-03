@@ -623,3 +623,202 @@ export function createGetWpfThemeResourceHandler(themeIndex: ThemeIndex, log: Lo
     return { content: [{ type: 'text' as const, text }] };
   };
 }
+
+// ── get_wpf_theme_palette ─────────────────────────────────────────────────────
+
+/** One parsed palette entry from a `<Theme>.Theme.Colors.xaml` file. */
+interface PaletteEntry {
+  group: string;                 // section label from the file's own comments
+  kind: 'Color' | 'Brush';       // <Color> vs <SolidColorBrush>
+  key: string;                   // x:Key (e.g. "Color_024", "Brush01")
+  value: string;                 // hex or named color (e.g. "#FF00AADE", "White")
+  note?: string;                 // trailing inline <!-- comment --> if present
+}
+
+/** Clean a XAML comment used as a section header: strip decorative `*`/`-` runs. */
+function cleanGroupLabel(raw: string): string {
+  return raw.replace(/\*/g, '').replace(/^[-\s]+|[-\s]+$/g, '').trim();
+}
+
+/**
+ * Parses an Infragistics `<Theme>.Theme.Colors.xaml` palette dictionary into a
+ * flat, grouped list of the theme's `<Color>` and `<SolidColorBrush>` resources.
+ * Grouping is derived from the file's own standalone `<!-- ... -->` section
+ * comments (e.g. "Base Colors", "Theme Accent colors") — never guessed.
+ */
+function parsePalette(xaml: string): PaletteEntry[] {
+  const entries: PaletteEntry[] = [];
+  let group = 'General';
+
+  for (const line of xaml.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    // A standalone comment on its own line acts as a section header.
+    const headerMatch = /^<!--\s*(.*?)\s*-->$/.exec(trimmed);
+    if (headerMatch) {
+      const label = cleanGroupLabel(headerMatch[1]);
+      if (label) group = label;
+      continue;
+    }
+
+    // <SolidColorBrush x:Key="Brush01" Color="#FF00AADE" />  (optional trailing comment)
+    const brush = /<SolidColorBrush\s+x:Key="([^"]+)"\s+Color="([^"]+)"\s*\/>\s*(?:<!--\s*(.*?)\s*-->)?/.exec(trimmed);
+    if (brush) {
+      entries.push({ group, kind: 'Brush', key: brush[1], value: brush[2], note: brush[3]?.trim() || undefined });
+      continue;
+    }
+
+    // <Color x:Key="Color_010">#E5FFFFFF</Color>  <!--90% White-->
+    const color = /<Color\s+x:Key="([^"]+)"\s*>\s*([^<]+?)\s*<\/Color>\s*(?:<!--\s*(.*?)\s*-->)?/.exec(trimmed);
+    if (color) {
+      entries.push({ group, kind: 'Color', key: color[1], value: color[2], note: color[3]?.trim() || undefined });
+      continue;
+    }
+  }
+
+  return entries;
+}
+
+const PALETTE_FILE_SUFFIX = '.theme.colors.xaml';
+
+/** Themes that ship a re-tunable palette file, in the newer ThemeManager family. */
+function themesWithPalette(themeIndex: ThemeIndex): { theme: string; file: ThemeResourceFile }[] {
+  return themeIndex.newerThemes
+    .map(t => ({ theme: t.theme, file: t.files.find(f => f.file.toLowerCase().endsWith(PALETTE_FILE_SUFFIX)) }))
+    .filter((t): t is { theme: string; file: ThemeResourceFile } => t.file !== undefined);
+}
+
+const PALETTE_GUIDANCE = [
+  '## How to apply a re-tuned palette',
+  '',
+  'These keys are the single re-color surface for the **newer "Infragistics.Controls.*" family** (charts, gauges, etc.) applied via `Infragistics.Themes.ThemeManager`. To recolor the theme WITHOUT creating a new theme, override just the keys you want in your own `ResourceDictionary` and merge it into the theme load — do NOT invent new keys or rename existing ones.',
+  '',
+  '⚠️ **Load-order matters.** The theme references these colors from compiled BAML primitives via `StaticResource` (resolved once at parse time), so merging an override dictionary *after* the theme has already loaded may NOT recolor already-styled controls. Merge your override so it is present BEFORE `ThemeManager.ApplicationTheme` is set / before the first themed window is created (e.g. in `App.xaml.cs` before `base.OnStartup`).',
+  '',
+  '⚠️ **Newer family only.** Legacy "Infragistics.Windows.*" controls (XamDataGrid, XamRibbon, XamDockManager, ...) do NOT read this palette — their themes are embedded BAML applied via `Theme="..."`. Recolor those by copying individual Styles/ControlTemplates (see `list_wpf_themes` / `get_wpf_theme_resource`).',
+  '',
+  '_This is a read-only introspection tool — it returns the real keys/values and a skeleton to copy; it does not modify your project._',
+].join('\n');
+
+/** Chooser guidance returned when no `theme` is supplied. */
+function buildPaletteChooser(themeNames: string[]): string {
+  return [
+    '# WPF Theme Palettes — pick a base theme',
+    '',
+    'These newer-family (ThemeManager) themes expose a re-tunable color palette:',
+    '',
+    ...themeNames.map(t => `- \`${t}\``),
+    '',
+    '## To re-color WITHOUT knowing the theme name',
+    '',
+    '1. **Detect the theme the app already uses** from the workspace, in priority order:',
+    '   - `App.xaml.cs` → `Infragistics.Themes.ThemeManager.ApplicationTheme = new <Name>Theme();`',
+    '   - the `.csproj` → an `Infragistics.WPF.Themes.<Name>.Trial` PackageReference',
+    '   - XAML → a `Theme="<Name>"` attribute',
+    '2. If you cannot detect it, **ask the user** which base theme they want — or simply whether they want a **dark** base (e.g. `MetroDark`, `RoyalDark`) or a **light** base (e.g. `Office2013`, `RoyalLight`, `Metro`, `IG`). _This tool cannot classify dark/light automatically — the palette files are not consistent enough to derive it reliably._',
+    '3. Call `get_wpf_theme_palette(theme)` with the chosen name to get its keys + a ready-to-merge override skeleton.',
+    '',
+    '_Concrete colors the user gives (e.g. "neon purple") are mapped to hex and assigned to the returned accent/chart-series keys by you — the tool only supplies the grounded keys._',
+  ].join('\n');
+}
+
+export function createGetWpfThemePaletteHandler(themeIndex: ThemeIndex, log: LogFn) {
+  return async (input: { theme?: string; filter?: string }): Promise<CallToolResult> => {
+    const start = performance.now();
+    const { theme, filter } = input;
+    const available = themesWithPalette(themeIndex);
+
+    // Chooser mode — no theme supplied: list palette-capable themes + detection guidance.
+    if (!theme || !theme.trim()) {
+      const text = buildPaletteChooser(available.map(t => t.theme));
+      log('get_wpf_theme_palette', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+      return { content: [{ type: 'text' as const, text }] };
+    }
+
+    const themeFilter = theme.toLowerCase().trim();
+    const exact = available.find(t => t.theme.toLowerCase() === themeFilter);
+    const substringMatches = available.filter(t => t.theme.toLowerCase().includes(themeFilter));
+    const match = exact ?? substringMatches[0];
+
+    if (!match) {
+      const names = available.map(t => `\`${t.theme}\``).join(', ');
+      const text = `No re-tunable palette found for theme "${theme}". Themes with a color palette (newer ThemeManager family): ${names}. Call list_wpf_themes to browse all themes and style folders.`;
+      log('get_wpf_theme_palette', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+      return { content: [{ type: 'text', text }], isError: true };
+    }
+
+    const xaml = loadThemeResource(match.file.path);
+    if (xaml === null) {
+      const text = `Palette file "${match.file.path}" for theme "${match.theme}" could not be read.`;
+      log('get_wpf_theme_palette', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+      return { content: [{ type: 'text', text }], isError: true };
+    }
+
+    let entries = parsePalette(xaml);
+    const filterLower = filter?.toLowerCase().trim();
+    if (filterLower) {
+      entries = entries.filter(e =>
+        e.group.toLowerCase().includes(filterLower) ||
+        e.key.toLowerCase().includes(filterLower) ||
+        e.value.toLowerCase().includes(filterLower) ||
+        e.note?.toLowerCase().includes(filterLower));
+    }
+
+    if (entries.length === 0) {
+      const text = filterLower
+        ? `Theme "${match.theme}" has a palette, but no entries matched filter "${filter}". Omit \`filter\` to see the full palette.`
+        : `Theme "${match.theme}" palette file parsed to zero entries (unexpected format).`;
+      log('get_wpf_theme_palette', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+      return { content: [{ type: 'text', text }], isError: true };
+    }
+
+    // Preserve first-seen group order for stable, readable output.
+    const groupOrder: string[] = [];
+    const byGroup = new Map<string, PaletteEntry[]>();
+    for (const e of entries) {
+      if (!byGroup.has(e.group)) { byGroup.set(e.group, []); groupOrder.push(e.group); }
+      byGroup.get(e.group)!.push(e);
+    }
+
+    const out: string[] = [];
+    out.push(`# WPF Theme Palette — ${match.theme} (${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}${filterLower ? `, filter "${filter}"` : ''})`);
+    out.push('', `Source: \`${match.file.path}\``);
+
+    // Ambiguous substring input matched more than one theme — surface the alternatives.
+    if (!exact && substringMatches.length > 1) {
+      const others = substringMatches.slice(1).map(t => `\`${t.theme}\``).join(', ');
+      out.push('', `> ⚠️ "${theme}" matched ${substringMatches.length} themes; showing **${match.theme}**. Other matches: ${others}. Pass an exact theme name to pick a different one.`);
+    }
+
+    for (const g of groupOrder) {
+      const items = byGroup.get(g)!;
+      out.push('', `## ${g}`, '', '| Key | Value | Notes |', '| --- | --- | --- |');
+      for (const e of items) {
+        out.push(`| \`${e.key}\` | \`${e.value}\`${e.kind === 'Brush' ? ' _(brush)_' : ''} | ${e.note ?? ''} |`);
+      }
+    }
+
+    // Ready-to-merge override skeleton with the verbatim keys.
+    out.push('', '## Override skeleton', '',
+      '_Copy into a `ResourceDictionary`, change only the values you want, and merge it ahead of the theme load (see guidance below). Delete rows you are not changing._',
+      '', '```xml',
+      '<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"',
+      '                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">');
+    for (const g of groupOrder) {
+      out.push(`  <!-- ${g} -->`);
+      for (const e of byGroup.get(g)!) {
+        out.push(e.kind === 'Brush'
+          ? `  <SolidColorBrush x:Key="${e.key}" Color="${e.value}" />`
+          : `  <Color x:Key="${e.key}">${e.value}</Color>`);
+      }
+    }
+    out.push('</ResourceDictionary>', '```');
+
+    out.push('', PALETTE_GUIDANCE);
+
+    const text = out.join('\n');
+    log('get_wpf_theme_palette', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+    return { content: [{ type: 'text' as const, text }] };
+  };
+}

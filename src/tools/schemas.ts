@@ -121,6 +121,32 @@ export const getWpfThemeResourceSchema = {
       Call list_wpf_themes first — never guess this path.`),
 };
 
+export const getWpfThemePaletteSchema = {
+  theme: z
+    .string()
+    .max(64)
+    .optional()
+    .describe(`A newer-family (ThemeManager) theme name, e.g. "MetroDark", "RoyalDark", "RoyalLight",
+      "Office2013", "Office2010Blue", "Metro", "IG". Case-insensitive; a substring is accepted.
+      Returns that theme's centralized color/brush palette (its \`<Theme>.Theme.Colors.xaml\`) so you can
+      re-color the theme by overriding existing keys — NOT create a new theme.
+      OMIT this to get the chooser: the list of palette-capable theme names plus how to detect which theme
+      the app already uses. Detect the current theme from the workspace FIRST (App.xaml.cs
+      \`ThemeManager.ApplicationTheme = new <Name>Theme();\`, an \`Infragistics.WPF.Themes.<Name>.Trial\`
+      PackageReference, or a \`Theme="<Name>"\` attribute); if you cannot, ask the user which base theme
+      (or dark vs light) they want, then call again with that theme.`),
+  filter: z
+    .string()
+    .max(64)
+    .optional()
+    .describe(`Optional substring filter matched against the palette group label (e.g. "accent", "error",
+      "chart", "base", "gauge"), the resource key (e.g. "Color_024", "Brush01"), the color value
+      (e.g. "00AADE", "#FF333333"), or an entry's note.
+      Case-insensitive. Omit to return the full palette. Ignored when \`theme\` is omitted.`),
+};
+
+
+
 
 export type GetApiReferenceInput = {
   component: string;
