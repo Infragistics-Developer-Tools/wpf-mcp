@@ -327,8 +327,16 @@ export function createSearchDocsHandler(docIndex: DocIndexEntry[], log: LogFn) {
     const results: DocSearchResult[] = [];
 
     for (const entry of docIndex) {
-      // Hard pre-filter: if a control name was given, the topic must reference it
-      if (controlFilter && !entry.controlNames.some(c => c.toLowerCase().includes(controlFilter))) {
+      // Hard pre-filter: if a control name was given, the topic must reference it.
+      // Bidirectional substring match handles docs that omit the "Xam" prefix in
+      // their controlName metadata (e.g. "FinancialChart" vs "XamFinancialChart"):
+      // either the stored name contains the filter, or the filter contains the stored name.
+      // Hyphens are also normalised so "financial-chart" matches "XamFinancialChart".
+      if (controlFilter && !entry.controlNames.some(c => {
+        const cNorm = c.toLowerCase().replace(/-/g, '');
+        const fNorm = controlFilter.replace(/-/g, '');
+        return cNorm.includes(fNorm) || fNorm.includes(cNorm);
+      })) {
         continue;
       }
       if (controlFilter) controlMatchCount++;
