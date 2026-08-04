@@ -6,9 +6,22 @@ import type { ComponentEntry, SearchIndexEntry, DocIndexEntry, ThemeIndex, Theme
 
 type LogFn = (tool: string, input: Record<string, unknown>, output: string, ms: number) => void;
 
+// A component is "themeable" if its name matches a legacy embedded-BAML style folder
+// (e.g. "XamDataGrid") or appears in a newer-family per-control theme file name (e.g.
+// "MetroDark.xamDataChart.xaml" matches "XamDataChart") in theme-index.json. This is a
+// naming-convention match, not a schema/foreign-key relationship — namespaces.json and
+// theme-index.json are built by two independent pipelines that share no common identifier.
+// Newer-family file names use a lowercase first letter, so comparison is case-insensitive.
+function isThemeableComponent(component: string, themeIndex: ThemeIndex): boolean {
+  const nameLower = component.toLowerCase();
+  const legacyMatch = themeIndex.legacyStyles.some(s => s.folder.toLowerCase() === nameLower);
+  const newerMatch = themeIndex.newerThemes.some(t => t.files.some(f => f.file.toLowerCase().includes(nameLower)));
+  return legacyMatch || newerMatch;
+}
+
 // ── list_wpf_components ───────────────────────────────────────────────────────
 
-export function createListComponentsHandler(components: ComponentEntry[], log: LogFn) {
+export function createListComponentsHandler(components: ComponentEntry[], themeIndex: ThemeIndex, log: LogFn) {
   return async (input: { filter?: string }): Promise<CallToolResult> => {
     const start = performance.now();
     const { filter } = input;
@@ -27,13 +40,21 @@ export function createListComponentsHandler(components: ComponentEntry[], log: L
       return { content: [{ type: 'text', text }], isError: true };
     }
 
-    const lines = matches.map(c => [
-      `## ${c.component}`,
-      `- **xmlns:** \`xmlns:${c.defaultPrefix}="${c.xamlNamespace}"\``,
-      `- **NuGet:** \`${c.nugetPackage}\``,
-      `- **Assembly:** \`${c.assembly}\``,
-      `- ${c.description}`,
-    ].join('\n'));
+    const lines = matches.map(c => {
+      const line = [
+        `## ${c.component}`,
+        `- **xmlns:** \`xmlns:${c.defaultPrefix}="${c.xamlNamespace}"\``,
+        `- **NuGet:** \`${c.nugetPackage}\``,
+        `- **Assembly:** \`${c.assembly}\``,
+        `- ${c.description}`,
+      ];
+      // Cheap name-only check (no api doc load) — flags controls that ship named themes so
+      // the theming path is visible before the agent ever calls get_wpf_api_reference.
+      if (isThemeableComponent(c.component, themeIndex)) {
+        line.push(`- 🎨 Ships with named themes — call \`setup_wpf_theme(component: "${c.component}")\` before writing style/theme overrides.`);
+      }
+      return line.join('\n');
+    });
 
     const text = [
       `# Infragistics WPF Components (${matches.length}${filter ? ` matching "${filter}"` : ' total'})`,
@@ -62,8 +83,7 @@ function formatMember(m: { name: string; summary: string; typeName?: string; isE
   return line;
 }
 
-export function createGetApiReferenceHandler(components: ComponentEntry[], log: LogFn) {
-  return async (input: ApiReferenceInput): Promise<CallToolResult> => {
+export function createGetApiReferenceHandler(components: ComponentEntry[], themeIndex: ThemeIndex, log: LogFn) {  return async (input: ApiReferenceInput): Promise<CallToolResult> => {
     const start = performance.now();
     const { component, kind } = input;
 
@@ -135,6 +155,20 @@ export function createGetApiReferenceHandler(components: ComponentEntry[], log: 
         '',
         `_No ${kind === 'all' ? '' : kind + ' '}members defined directly on this type._`,
         `_This type's own API surface is empty or was filtered by "kind". ${baseHint}_`
+      );
+    }
+
+    // Computed theming hint — only fires when this type actually has Brush-typed members
+    // AND ships with named themes (per theme-index.json), so it stays targeted instead of
+    // appearing on every type. Points directly at setup_wpf_theme with the resolved name
+    // filled in, instead of relying on search_wpf_docs (which has no coverage for newer-
+    // family controls' theming and can dead-end).
+    const brushMembers = allMembers.filter(m => m.typeName?.includes('Brush'));
+    if (brushMembers.length > 0 && isThemeableComponent(doc.component, themeIndex)) {
+      const examples = brushMembers.slice(0, 3).map(m => `\`${m.name}\``).join(', ');
+      out.push(
+        '',
+        `_⚠️ This type has Brush-typed properties (e.g. ${examples}) and ships with named themes. Before setting these directly or writing Style/ControlTemplate overrides, call \`setup_wpf_theme(component: "${doc.component}")\` to check whether a named theme (\`Theme="..."\` or \`ThemeManager\`) already covers this, and to get exact resource file paths for customizing it._`
       );
     }
 
@@ -521,7 +555,7 @@ function formatResourceFiles(files: ThemeResourceFile[], limit: number): string[
   return lines;
 }
 
-export function createListWpfThemesHandler(themeIndex: ThemeIndex, log: LogFn) {
+export function createSetupWpfThemeHandler(themeIndex: ThemeIndex, log: LogFn) {
   return async (input: { component?: string; theme?: string }): Promise<CallToolResult> => {
     const start = performance.now();
     const { component, theme } = input;

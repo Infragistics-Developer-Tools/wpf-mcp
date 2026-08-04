@@ -6,8 +6,8 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 import { TOOL_DESCRIPTIONS } from './tools/constants.js';
-import { listComponentsSchema, getApiReferenceSchema, searchApiSchema, getProjectScaffoldSchema, searchDocsSchema, getDocSchema, listWpfThemesSchema, getWpfThemeResourceSchema, getWpfThemePaletteSchema } from './tools/schemas.js';
-import { createListComponentsHandler, createGetApiReferenceHandler, createSearchApiHandler, createGetProjectScaffoldHandler, createSearchDocsHandler, createGetDocHandler, createListWpfThemesHandler, createGetWpfThemeResourceHandler, createGetWpfThemePaletteHandler } from './tools/handlers.js';
+import { listComponentsSchema, getApiReferenceSchema, searchApiSchema, getProjectScaffoldSchema, searchDocsSchema, getDocSchema, setupWpfThemeSchema, getWpfThemeResourceSchema, getWpfThemePaletteSchema } from './tools/schemas.js';
+import { createListComponentsHandler, createGetApiReferenceHandler, createSearchApiHandler, createGetProjectScaffoldHandler, createSearchDocsHandler, createGetDocHandler, createSetupWpfThemeHandler, createGetWpfThemeResourceHandler, createGetWpfThemePaletteHandler } from './tools/handlers.js';
 import type { ComponentEntry, SearchIndexEntry, DocIndexEntry, ThemeIndex } from './lib/types.js';
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
@@ -66,7 +66,7 @@ server.registerTool(
     annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
     inputSchema: listComponentsSchema,
   },
-  createListComponentsHandler(components, log)
+  createListComponentsHandler(components, themeIndex, log)
 );
 
 server.registerTool(
@@ -76,7 +76,7 @@ server.registerTool(
     annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
     inputSchema: getApiReferenceSchema,
   },
-  createGetApiReferenceHandler(components, log)
+  createGetApiReferenceHandler(components, themeIndex, log)
 );
 
 server.registerTool(
@@ -124,9 +124,9 @@ server.registerTool(
   {
     description: TOOL_DESCRIPTIONS.setup_wpf_theme,
     annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
-    inputSchema: listWpfThemesSchema,
+    inputSchema: setupWpfThemeSchema,
   },
-  createListWpfThemesHandler(themeIndex, log)
+  createSetupWpfThemeHandler(themeIndex, log)
 );
 
 server.registerTool(
