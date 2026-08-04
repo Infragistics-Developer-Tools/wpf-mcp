@@ -96,7 +96,7 @@ export const getDocSchema = {
       Case-insensitive.`),
 };
 
-export const listWpfThemesSchema = {
+export const setupWpfThemeSchema = {
   component: z
     .string()
     .max(64)

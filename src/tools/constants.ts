@@ -7,8 +7,11 @@ Returns one entry per component: name, xmlns URI, prefix, NuGet package, and des
   • get_wpf_api_reference(component) — full member list
   • search_wpf_docs(query, control: component) — how-to topics scoped to this control
   • get_project_scaffold(components: [component, ...]) — project setup
+  • setup_wpf_theme(component) — named themes and style/resource files for this control
 
-⚠️ The API reference alone often isn't enough to write correct XAML or give correct advice — required child-element nesting is only one example. Documentation also covers styling/theming, data binding, editing/validation, filtering/sorting/grouping/summaries, exporting, performance, and known issues/breaking changes. Before writing non-trivial XAML or advising on configuration for a control, call search_wpf_docs(query, control: component) for a relevant topic, then get_wpf_doc on the result. Skipping this is a common cause of structural errors, incorrect property usage, and outdated advice.`,
+Entries that ship named themes (legacy embedded-BAML \`Theme="..."\` styles or newer ThemeManager themes) are flagged inline with "🎨 Ships with named themes" and the exact \`setup_wpf_theme(component: "...")\` call to make — check that marker before assuming a control needs hand-written Style/ControlTemplate overrides for dark mode, brand colors, or any other visual change.
+
+⚠️ The API reference alone often isn't enough to write correct XAML or give correct advice — required child-element nesting is only one example. Documentation also covers data binding, editing/validation, filtering/sorting/grouping/summaries, exporting, performance, and known issues/breaking changes. Before writing non-trivial XAML or advising on configuration for a control, call search_wpf_docs(query, control: component) for a relevant topic, then get_wpf_doc on the result — except for styling/theming specifically, where setup_wpf_theme (see marker above) is the authoritative source, not search_wpf_docs. Skipping this is a common cause of structural errors, incorrect property usage, and outdated advice.`,
 
   get_wpf_api_reference: `Get full API documentation for an Infragistics WPF type: xmlns declaration, NuGet package, type summary, and all members (properties, methods, events) with descriptions.
 
@@ -16,7 +19,9 @@ Use after list_wpf_components (or search_wpf_api, if the exact type name isn't k
 
 If a type's own member list is unexpectedly sparse, the response names its base type — call get_wpf_api_reference again on that base type to see the rest of the inherited surface.
 
-⚠️ Property names here are authoritative, but this tool only lists members — it does not show how properties combine in real XAML, which child elements a container accepts, or how to approach styling, data binding, editing, performance, or other usage concerns. Never guess a property name from what sounds plausible — look it up here first. Before writing non-trivial XAML or giving configuration/usage advice, pass the same component name to search_wpf_docs(query, control: component) to find a relevant topic then get_wpf_doc(slug) to read the full working example.`,
+When a type has Brush-typed properties (e.g. Foreground, Background, Stroke) AND ships with named themes, the response ends with a computed "⚠️ ... ships with named themes" hint naming the exact setup_wpf_theme(component: "...") call to make — treat that as a hard stop before setting those properties directly. A named theme (Theme="..." or ThemeManager) may already cover the visual change more consistently than a one-off property override, and setup_wpf_theme/get_wpf_theme_resource/get_wpf_theme_palette read the real theme files, not a guess.
+
+⚠️ Property names here are authoritative, but this tool only lists members — it does not show how properties combine in real XAML, which child elements a container accepts, or how to approach data binding, editing, performance, or other non-visual usage concerns. Never guess a property name from what sounds plausible — look it up here first. Before writing non-trivial XAML or giving configuration/usage advice, pass the same component name to search_wpf_docs(query, control: component) to find a relevant topic then get_wpf_doc(slug) to read the full working example — for styling/theming specifically, prefer the hint above (or call setup_wpf_theme directly) over search_wpf_docs, which has little to no theming coverage for many newer-family controls.`,
 
   get_project_scaffold: `Generate dotnet CLI setup commands and XAML xmlns declarations for a new Infragistics WPF project.
 
