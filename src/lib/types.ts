@@ -67,6 +67,14 @@ export interface DocEntry extends DocIndexEntry {
 export interface ThemeResourceFile {
   path: string; // e.g. "Themes/MetroDark/MetroDark.xamDataChart.xaml"
   file: string; // filename only, e.g. "MetroDark.xamDataChart.xaml"
+  /**
+   * Distinct control type names actually styled inside this file, parsed from every
+   * `TargetType="..."` / `TargetType="{x:Type prefix:Name}"` occurrence. Some files
+   * (e.g. "MetroDark.xamDataChart.xaml") bundle styles for an entire control family
+   * (XamDataChart, XamCategoryChart, XamPieChart, ...) under one file name — this lets
+   * lookups match on what's actually styled, not just the file's own name.
+   */
+  targetTypes: string[];
 }
 
 /** A named theme applied via Infragistics.Themes.ThemeManager (newer "Infragistics.Controls.*" family) */

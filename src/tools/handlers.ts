@@ -6,16 +6,21 @@ import type { ComponentEntry, SearchIndexEntry, DocIndexEntry, ThemeIndex, Theme
 
 type LogFn = (tool: string, input: Record<string, unknown>, output: string, ms: number) => void;
 
-// A component is "themeable" if its name matches a legacy embedded-BAML style folder
-// (e.g. "XamDataGrid") or appears in a newer-family per-control theme file name (e.g.
-// "MetroDark.xamDataChart.xaml" matches "XamDataChart") in theme-index.json. This is a
-// naming-convention match, not a schema/foreign-key relationship — namespaces.json and
-// theme-index.json are built by two independent pipelines that share no common identifier.
-// Newer-family file names use a lowercase first letter, so comparison is case-insensitive.
+// A component is "themeable" if it's actually styled inside a theme file — checked via
+// `targetTypes` (parsed from real `TargetType="..."` declarations in the XAML at build
+// time, see scripts/build-themes.ts) — or, as a fallback for files where content parsing
+// found nothing, a legacy folder name / newer-family filename match. `targetTypes` is the
+// precise signal: some theme files bundle an entire control family under one file name
+// (e.g. "MetroDark.xamDataChart.xaml" also styles XamCategoryChart, XamPieChart,
+// XamFunnelChart, ...), so a filename-only check misses controls styled inside a
+// differently-named file. Comparison is case-insensitive throughout.
 function isThemeableComponent(component: string, themeIndex: ThemeIndex): boolean {
   const nameLower = component.toLowerCase();
-  const legacyMatch = themeIndex.legacyStyles.some(s => s.folder.toLowerCase() === nameLower);
-  const newerMatch = themeIndex.newerThemes.some(t => t.files.some(f => f.file.toLowerCase().includes(nameLower)));
+  const legacyMatch = themeIndex.legacyStyles.some(s =>
+    s.folder.toLowerCase() === nameLower ||
+    s.files.some(f => f.targetTypes.some(t => t.toLowerCase() === nameLower)));
+  const newerMatch = themeIndex.newerThemes.some(t =>
+    t.files.some(f => f.file.toLowerCase().includes(nameLower) || f.targetTypes.some(tt => tt.toLowerCase() === nameLower)));
   return legacyMatch || newerMatch;
 }
 
@@ -547,9 +552,20 @@ function newerApplyBlock(theme: string): string {
   ].join('\n');
 }
 
-function formatResourceFiles(files: ThemeResourceFile[], limit: number): string[] {
+function formatResourceFiles(files: ThemeResourceFile[], limit: number, componentFilter?: string): string[] {
   const shown = files.slice(0, limit);
-  const lines = shown.map(f => `  - \`${f.path}\``);
+  const lines = shown.map(f => {
+    let line = `  - \`${f.path}\``;
+    // If the file matched only via a real TargetType inside it (not its own name), say so —
+    // otherwise it looks like an unrelated file was returned for the requested component.
+    if (componentFilter && !f.file.toLowerCase().includes(componentFilter)) {
+      const matchedType = f.targetTypes.find(t => t.toLowerCase() === componentFilter);
+      if (matchedType) {
+        line += ` — styles \`${matchedType}\` directly (bundled with other control types under this file name)`;
+      }
+    }
+    return line;
+  });
   const remaining = files.length - shown.length;
   if (remaining > 0) lines.push(`  - _...and ${remaining} more file(s) — narrow further with \`component\` and/or \`theme\` to see them_`);
   return lines;
@@ -580,17 +596,29 @@ export function createSetupWpfThemeHandler(themeIndex: ThemeIndex, log: LogFn) {
 
     const matchedNewer = themeIndex.newerThemes
       .filter(t => !themeFilter || t.theme.toLowerCase().includes(themeFilter))
-      .map(t => ({ theme: t.theme, files: t.files.filter(f => !componentFilter || f.file.toLowerCase().includes(componentFilter)) }))
+      .map(t => ({
+        theme: t.theme,
+        files: t.files.filter(f =>
+          !componentFilter ||
+          f.file.toLowerCase().includes(componentFilter) ||
+          f.targetTypes.some(tt => tt.toLowerCase() === componentFilter)
+        ),
+      }))
       .filter(t => t.files.length > 0);
 
     const matchedLegacy = themeIndex.legacyStyles
       .map(s => {
-        // `component` matches either the style folder (e.g. "Ribbon" → whole folder) or an
-        // individual file name (e.g. "RibbonMetroDark" → that one file); `theme` matches file names.
+        // `component` matches either the style folder (e.g. "Ribbon" → whole folder), an
+        // individual file name (e.g. "RibbonMetroDark" → that one file), or a real TargetType
+        // parsed out of the file's own content (covers files that bundle multiple control
+        // types under one file name); `theme` matches file names.
         const folderMatchesComponent = !componentFilter || s.folder.toLowerCase().includes(componentFilter);
         const files = s.files.filter(f => {
           const nameLower = f.file.toLowerCase();
-          const componentOk = folderMatchesComponent || nameLower.includes(componentFilter ?? '');
+          const componentOk =
+            folderMatchesComponent ||
+            nameLower.includes(componentFilter ?? '') ||
+            f.targetTypes.some(tt => tt.toLowerCase() === componentFilter);
           const themeOk = !themeFilter || nameLower.includes(themeFilter);
           return componentOk && themeOk;
         });
@@ -613,7 +641,7 @@ export function createSetupWpfThemeHandler(themeIndex: ThemeIndex, log: LogFn) {
     if (matchedNewer.length > 0) {
       out.push('', '## Newer family (ThemeManager)');
       for (const t of matchedNewer) {
-        out.push('', `### ${t.theme}`, ...formatResourceFiles(t.files, 20));
+        out.push('', `### ${t.theme}`, ...formatResourceFiles(t.files, 20, componentFilter));
         out.push(newerApplyBlock(t.theme));
       }
     }
@@ -621,7 +649,7 @@ export function createSetupWpfThemeHandler(themeIndex: ThemeIndex, log: LogFn) {
     if (matchedLegacy.length > 0) {
       out.push('', '## Legacy family (Theme="..." property)');
       for (const s of matchedLegacy) {
-        out.push('', `### ${s.folder}`, ...formatResourceFiles(s.files, 20));
+        out.push('', `### ${s.folder}`, ...formatResourceFiles(s.files, 20, componentFilter));
       }
     }
 

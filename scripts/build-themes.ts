@@ -49,6 +49,7 @@ const INDEX_FILE          = join(OUT_DATA_DIR, 'theme-index.json');
 interface ThemeResourceFile {
   path: string; // relative path used as the get_wpf_theme_resource `path` input, e.g. "Themes/MetroDark/MetroDark.xamDataChart.xaml"
   file: string; // filename only, e.g. "MetroDark.xamDataChart.xaml"
+  targetTypes: string[]; // distinct control type names actually styled inside this file (parsed from TargetType="...")
 }
 
 interface NewerThemeEntry {
@@ -90,6 +91,32 @@ function copyXaml(srcDir: string, destDir: string, files: string[]): void {
   }
 }
 
+// Matches both `TargetType="local:XamCategoryChart"` and `TargetType="{x:Type local:XamXYChart}"`
+// (with or without a namespace prefix before the colon), capturing just the type name.
+// Some theme files bundle Style blocks for an entire control family (e.g. "MetroDark.xamDataChart.xaml"
+// styles XamDataChart, XamCategoryChart, XamPieChart, XamFunnelChart, ... all in one file) under a
+// file name that only matches ONE of those types — this lets lookups match on what's genuinely
+// styled inside the file instead of only the file's own name.
+const TARGET_TYPE_RE = /TargetType\s*=\s*"\{?(?:x:Type\s+)?(?:[\w.]+:)?([\w`]+)\}?"/g;
+
+function extractTargetTypes(content: string): string[] {
+  const found = new Set<string>();
+  let m: RegExpExecArray | null;
+  TARGET_TYPE_RE.lastIndex = 0;
+  while ((m = TARGET_TYPE_RE.exec(content))) {
+    found.add(m[1]);
+  }
+  return [...found].sort();
+}
+
+function toResourceFiles(srcDir: string, prefix: string, files: string[]): ThemeResourceFile[] {
+  return files.map(f => ({
+    path: `${prefix}/${f}`,
+    file: f,
+    targetTypes: extractTargetTypes(readFileSync(join(srcDir, f), 'utf-8')),
+  }));
+}
+
 if (!existsSync(RESOURCES_DIR)) {
   console.error(`wpf-resources submodule not found at ${RESOURCES_DIR}. Run: git submodule update --init docs/wpf-resources`);
   process.exit(1);
@@ -103,7 +130,7 @@ for (const themeName of listSubdirs(THEMES_SRC)) {
   const files = listXamlFiles(srcDir);
   if (!files.length) continue;
   copyXaml(srcDir, join(OUT_RESOURCES_DIR, 'Themes', themeName), files);
-  newerThemes.push({ theme: themeName, files: files.map(f => ({ path: `Themes/${themeName}/${f}`, file: f })) });
+  newerThemes.push({ theme: themeName, files: toResourceFiles(srcDir, `Themes/${themeName}`, files) });
 }
 
 // ── Legacy "Infragistics.Windows.*" per-component embedded themes ────────────
@@ -114,7 +141,7 @@ for (const folder of listSubdirs(DEFAULT_STYLES_SRC)) {
   const files = listXamlFiles(srcDir);
   if (!files.length) continue;
   copyXaml(srcDir, join(OUT_RESOURCES_DIR, 'DefaultStyles', folder), files);
-  legacyStyles.push({ folder, files: files.map(f => ({ path: `DefaultStyles/${folder}/${f}`, file: f })) });
+  legacyStyles.push({ folder, files: toResourceFiles(srcDir, `DefaultStyles/${folder}`, files) });
 }
 
 mkdirSync(OUT_DATA_DIR, { recursive: true });
