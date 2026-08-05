@@ -96,6 +96,59 @@ export const getDocSchema = {
       Case-insensitive.`),
 };
 
+export const setupWpfThemeSchema = {
+  component: z
+    .string()
+    .max(64)
+    .optional()
+    .describe(`Optional component/keyword filter, e.g. "XamDataGrid", "Ribbon", "DataChart", "DockManager".
+      Case-insensitive substring match against legacy style folder names AND per-control theme file names
+      (both families) — so you can filter by a control folder ("Ribbon") or by a specific file name ("RibbonMetroDark").
+      Omit to list every available theme name and legacy style folder with a file count.`),
+  theme: z
+    .string()
+    .max(64)
+    .optional()
+    .describe(`Optional theme name filter, e.g. "MetroDark", "RoyalDark", "Office2013", "Metro".
+      Case-insensitive substring match. Combine with \`component\` to find one exact file.`),
+};
+
+export const getWpfThemeResourceSchema = {
+  path: z
+    .string()
+    .min(1)
+    .max(200)
+    .describe(`The exact resource path returned by setup_wpf_theme, e.g.
+      "Themes/MetroDark/MetroDark.xamDataChart.xaml" or "DefaultStyles/Ribbon/RibbonMetroDark.xaml".
+      Call setup_wpf_theme first — never guess this path.`),
+};
+
+export const getWpfThemePaletteSchema = {
+  theme: z
+    .string()
+    .max(64)
+    .optional()
+    .describe(`A newer-family (ThemeManager) theme name, e.g. "MetroDark", "RoyalDark", "RoyalLight",
+      "Office2013", "Office2010Blue", "Metro", "IG". Case-insensitive; a substring is accepted.
+      Returns that theme's centralized color/brush palette (its \`<Theme>.Theme.Colors.xaml\`) so you can
+      re-color the theme by overriding existing keys — NOT create a new theme.
+      OMIT this to get the chooser: the list of palette-capable theme names plus how to detect which theme
+      the app already uses. Detect the current theme from the workspace FIRST (App.xaml.cs
+      \`ThemeManager.ApplicationTheme = new <Name>Theme();\`, an \`Infragistics.WPF.Themes.<Name>.Trial\`
+      PackageReference, or a \`Theme="<Name>"\` attribute); if you cannot, ask the user which base theme
+      (or dark vs light) they want, then call again with that theme.`),
+  filter: z
+    .string()
+    .max(64)
+    .optional()
+    .describe(`Optional substring filter matched against the palette group label (e.g. "accent", "error",
+      "chart", "base", "gauge"), the resource key (e.g. "Color_024", "Brush01"), the color value
+      (e.g. "00AADE", "#FF333333"), or an entry's note.
+      Case-insensitive. Omit to return the full palette. Ignored when \`theme\` is omitted.`),
+};
+
+
+
 
 export type GetApiReferenceInput = {
   component: string;

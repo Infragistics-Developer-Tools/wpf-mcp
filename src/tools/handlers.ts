@@ -1,13 +1,32 @@
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { loadApiDoc } from '../lib/api-doc-loader.js';
 import { loadDoc } from '../lib/docs-loader.js';
-import type { ComponentEntry, SearchIndexEntry, DocIndexEntry } from '../lib/types.js';
+import { loadThemeResource } from '../lib/theme-loader.js';
+import type { ComponentEntry, SearchIndexEntry, DocIndexEntry, ThemeIndex, ThemeResourceFile } from '../lib/types.js';
 
 type LogFn = (tool: string, input: Record<string, unknown>, output: string, ms: number) => void;
 
+// A component is "themeable" if it's actually styled inside a theme file — checked via
+// `targetTypes` (parsed from real `TargetType="..."` declarations in the XAML at build
+// time, see scripts/build-themes.ts) — or, as a fallback for files where content parsing
+// found nothing, a legacy folder name / newer-family filename match. `targetTypes` is the
+// precise signal: some theme files bundle an entire control family under one file name
+// (e.g. "MetroDark.xamDataChart.xaml" also styles XamCategoryChart, XamPieChart,
+// XamFunnelChart, ...), so a filename-only check misses controls styled inside a
+// differently-named file. Comparison is case-insensitive throughout.
+function isThemeableComponent(component: string, themeIndex: ThemeIndex): boolean {
+  const nameLower = component.toLowerCase();
+  const legacyMatch = themeIndex.legacyStyles.some(s =>
+    s.folder.toLowerCase() === nameLower ||
+    s.files.some(f => f.targetTypes.some(t => t.toLowerCase() === nameLower)));
+  const newerMatch = themeIndex.newerThemes.some(t =>
+    t.files.some(f => f.file.toLowerCase().includes(nameLower) || f.targetTypes.some(tt => tt.toLowerCase() === nameLower)));
+  return legacyMatch || newerMatch;
+}
+
 // ── list_wpf_components ───────────────────────────────────────────────────────
 
-export function createListComponentsHandler(components: ComponentEntry[], log: LogFn) {
+export function createListComponentsHandler(components: ComponentEntry[], themeIndex: ThemeIndex, log: LogFn) {
   return async (input: { filter?: string }): Promise<CallToolResult> => {
     const start = performance.now();
     const { filter } = input;
@@ -26,13 +45,21 @@ export function createListComponentsHandler(components: ComponentEntry[], log: L
       return { content: [{ type: 'text', text }], isError: true };
     }
 
-    const lines = matches.map(c => [
-      `## ${c.component}`,
-      `- **xmlns:** \`xmlns:${c.defaultPrefix}="${c.xamlNamespace}"\``,
-      `- **NuGet:** \`${c.nugetPackage}\``,
-      `- **Assembly:** \`${c.assembly}\``,
-      `- ${c.description}`,
-    ].join('\n'));
+    const lines = matches.map(c => {
+      const line = [
+        `## ${c.component}`,
+        `- **xmlns:** \`xmlns:${c.defaultPrefix}="${c.xamlNamespace}"\``,
+        `- **NuGet:** \`${c.nugetPackage}\``,
+        `- **Assembly:** \`${c.assembly}\``,
+        `- ${c.description}`,
+      ];
+      // Cheap name-only check (no api doc load) — flags controls that ship named themes so
+      // the theming path is visible before the agent ever calls get_wpf_api_reference.
+      if (isThemeableComponent(c.component, themeIndex)) {
+        line.push(`- 🎨 Ships with named themes — call \`setup_wpf_theme(component: "${c.component}")\` before writing style/theme overrides.`);
+      }
+      return line.join('\n');
+    });
 
     const text = [
       `# Infragistics WPF Components (${matches.length}${filter ? ` matching "${filter}"` : ' total'})`,
@@ -61,8 +88,7 @@ function formatMember(m: { name: string; summary: string; typeName?: string; isE
   return line;
 }
 
-export function createGetApiReferenceHandler(components: ComponentEntry[], log: LogFn) {
-  return async (input: ApiReferenceInput): Promise<CallToolResult> => {
+export function createGetApiReferenceHandler(components: ComponentEntry[], themeIndex: ThemeIndex, log: LogFn) {  return async (input: ApiReferenceInput): Promise<CallToolResult> => {
     const start = performance.now();
     const { component, kind } = input;
 
@@ -134,6 +160,20 @@ export function createGetApiReferenceHandler(components: ComponentEntry[], log: 
         '',
         `_No ${kind === 'all' ? '' : kind + ' '}members defined directly on this type._`,
         `_This type's own API surface is empty or was filtered by "kind". ${baseHint}_`
+      );
+    }
+
+    // Computed theming hint — only fires when this type actually has Brush-typed members
+    // AND ships with named themes (per theme-index.json), so it stays targeted instead of
+    // appearing on every type. Points directly at setup_wpf_theme with the resolved name
+    // filled in, instead of relying on search_wpf_docs (which has no coverage for newer-
+    // family controls' theming and can dead-end).
+    const brushMembers = allMembers.filter(m => m.typeName?.includes('Brush'));
+    if (brushMembers.length > 0 && isThemeableComponent(doc.component, themeIndex)) {
+      const examples = brushMembers.slice(0, 3).map(m => `\`${m.name}\``).join(', ');
+      out.push(
+        '',
+        `_⚠️ This type has Brush-typed properties (e.g. ${examples}) and ships with named themes. Before setting these directly or writing Style/ControlTemplate overrides, call \`setup_wpf_theme(component: "${doc.component}")\` to check whether a named theme (\`Theme="..."\` or \`ThemeManager\`) already covers this, and to get exact resource file paths for customizing it._`
       );
     }
 
@@ -459,6 +499,430 @@ export function createGetDocHandler(docIndex: DocIndexEntry[], log: LogFn) {
 
     const text = out.join('\n');
     log('get_wpf_doc', input, text, Math.round(performance.now() - start));
+    return { content: [{ type: 'text' as const, text }] };
+  };
+}
+
+// ── setup_wpf_theme ───────────────────────────────────────────────────────────
+
+const NEWER_MECHANISM_LINE =
+  '_Newer family (`Themes/`): apply via `Infragistics.Themes.ThemeManager.ApplicationTheme = new <Name>Theme();` in App.xaml.cs (requires the `Infragistics.WPF.Themes.<Name>.Trial` NuGet package). Do NOT merge these files directly into `Application.Resources`._';
+
+const LEGACY_MECHANISM_LINE =
+  '_Legacy family (`DefaultStyles/`): the named theme is already embedded in the component\'s assembly — just set `Theme="<Name>"` on the control. Use these files only to copy/override individual Styles/ControlTemplates._';
+
+const THEME_MECHANISM_GUIDE = [
+  '## How to apply a theme',
+  '',
+  LEGACY_MECHANISM_LINE,
+  '',
+  NEWER_MECHANISM_LINE,
+  '',
+  '**Newer-family apply template (replace `<Name>` with the theme):**',
+  '```sh',
+  'dotnet add package Infragistics.WPF.Themes.<Name>.Trial',
+  '```',
+  '```csharp',
+  '// App.xaml.cs — set before the first window is created',
+  'Infragistics.Themes.ThemeManager.ApplicationTheme = new Infragistics.Themes.<Name>Theme();',
+  '```',
+].join('\n');
+
+/**
+ * Complete, ready-to-paste apply block for one newer-family (ThemeManager) theme —
+ * NuGet package line + App.xaml.cs boilerplate — so applying a theme is fewer steps
+ * than hand-authoring brushes.
+ */
+function newerApplyBlock(theme: string): string {
+  return [
+    '',
+    `**Apply \`${theme}\` (ready to paste):**`,
+    '```sh',
+    `dotnet add package Infragistics.WPF.Themes.${theme}.Trial`,
+    '```',
+    '```csharp',
+    '// App.xaml.cs — set before the first window is created',
+    'protected override void OnStartup(StartupEventArgs e)',
+    '{',
+    `    Infragistics.Themes.ThemeManager.ApplicationTheme = new Infragistics.Themes.${theme}Theme();`,
+    '    base.OnStartup(e);',
+    '}',
+    '```',
+    '_Covers the newer "Infragistics.Controls.*" family (charts, gauges, maps, XamGrid, etc.)._',
+  ].join('\n');
+}
+
+function formatResourceFiles(files: ThemeResourceFile[], limit: number, componentFilter?: string): string[] {
+  const shown = files.slice(0, limit);
+  const lines = shown.map(f => {
+    let line = `  - \`${f.path}\``;
+    // If the file matched only via a real TargetType inside it (not its own name), say so —
+    // otherwise it looks like an unrelated file was returned for the requested component.
+    if (componentFilter && !f.file.toLowerCase().includes(componentFilter)) {
+      const matchedType = f.targetTypes.find(t => t.toLowerCase() === componentFilter);
+      if (matchedType) {
+        line += ` — styles \`${matchedType}\` directly (bundled with other control types under this file name)`;
+      }
+    }
+    return line;
+  });
+  const remaining = files.length - shown.length;
+  if (remaining > 0) lines.push(`  - _...and ${remaining} more file(s) — narrow further with \`component\` and/or \`theme\` to see them_`);
+  return lines;
+}
+
+export function createSetupWpfThemeHandler(themeIndex: ThemeIndex, log: LogFn) {
+  return async (input: { component?: string; theme?: string }): Promise<CallToolResult> => {
+    const start = performance.now();
+    const { component, theme } = input;
+    const componentFilter = component?.toLowerCase().trim();
+    const themeFilter = theme?.toLowerCase().trim();
+
+    const out: string[] = [];
+
+    if (!componentFilter && !themeFilter) {
+      // Browse mode — summarize everything available.
+      out.push(`# Available WPF Themes`, '');
+      out.push('## Newer family (ThemeManager) — theme names');
+      themeIndex.newerThemes.forEach(t => out.push(`- **${t.theme}** (${t.files.length} file${t.files.length === 1 ? '' : 's'})`));
+      out.push('', '## Legacy family (Theme="..." property) — style folders');
+      themeIndex.legacyStyles.forEach(s => out.push(`- **${s.folder}** (${s.files.length} file${s.files.length === 1 ? '' : 's'})`));
+      out.push('', THEME_MECHANISM_GUIDE);
+      out.push('', '_Pass `component` and/or `theme` to filter down to exact file paths, then call get_wpf_theme_resource(path) to read one._');
+      const text = out.join('\n');
+      log('setup_wpf_theme', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+      return { content: [{ type: 'text' as const, text }] };
+    }
+
+    const matchedNewer = themeIndex.newerThemes
+      .filter(t => !themeFilter || t.theme.toLowerCase().includes(themeFilter))
+      .map(t => ({
+        theme: t.theme,
+        files: t.files.filter(f =>
+          !componentFilter ||
+          f.file.toLowerCase().includes(componentFilter) ||
+          f.targetTypes.some(tt => tt.toLowerCase() === componentFilter)
+        ),
+      }))
+      .filter(t => t.files.length > 0);
+
+    const matchedLegacy = themeIndex.legacyStyles
+      .map(s => {
+        // `component` matches either the style folder (e.g. "Ribbon" → whole folder), an
+        // individual file name (e.g. "RibbonMetroDark" → that one file), or a real TargetType
+        // parsed out of the file's own content (covers files that bundle multiple control
+        // types under one file name); `theme` matches file names.
+        const folderMatchesComponent = !componentFilter || s.folder.toLowerCase().includes(componentFilter);
+        const files = s.files.filter(f => {
+          const nameLower = f.file.toLowerCase();
+          const componentOk =
+            folderMatchesComponent ||
+            nameLower.includes(componentFilter ?? '') ||
+            f.targetTypes.some(tt => tt.toLowerCase() === componentFilter);
+          const themeOk = !themeFilter || nameLower.includes(themeFilter);
+          return componentOk && themeOk;
+        });
+        return { folder: s.folder, files };
+      })
+      .filter(s => s.files.length > 0);
+
+    if (matchedNewer.length === 0 && matchedLegacy.length === 0) {
+      const text = `No theme resource files matched component="${component ?? ''}" theme="${theme ?? ''}". Call setup_wpf_theme with no arguments to browse all available theme names and style folders.`;
+      log('setup_wpf_theme', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+      return { content: [{ type: 'text', text }], isError: true };
+    }
+
+    const totalFiles =
+      matchedNewer.reduce((n, t) => n + t.files.length, 0) +
+      matchedLegacy.reduce((n, s) => n + s.files.length, 0);
+
+    out.push(`# WPF Theme Resources${component ? ` — component: "${component}"` : ''}${theme ? ` — theme: "${theme}"` : ''} (${totalFiles} file${totalFiles === 1 ? '' : 's'})`);
+
+    if (matchedNewer.length > 0) {
+      out.push('', '## Newer family (ThemeManager)');
+      for (const t of matchedNewer) {
+        out.push('', `### ${t.theme}`, ...formatResourceFiles(t.files, 20, componentFilter));
+        out.push(newerApplyBlock(t.theme));
+      }
+    }
+
+    if (matchedLegacy.length > 0) {
+      out.push('', '## Legacy family (Theme="..." property)');
+      for (const s of matchedLegacy) {
+        out.push('', `### ${s.folder}`, ...formatResourceFiles(s.files, 20, componentFilter));
+      }
+    }
+
+    // Family-specific mechanism reminder (avoids dumping both mechanisms when only one is relevant).
+    const mechanismLines: string[] = [];
+    if (matchedLegacy.length > 0) mechanismLines.push(LEGACY_MECHANISM_LINE);
+    if (matchedNewer.length > 0) mechanismLines.push(NEWER_MECHANISM_LINE);
+    out.push('', ...mechanismLines);
+
+    // If the filter narrowed to exactly one file, spell out the ready-to-use next call.
+    if (totalFiles === 1) {
+      const singlePath =
+        matchedNewer[0]?.files[0]?.path ?? matchedLegacy[0]?.files[0]?.path ?? '';
+      out.push('', `_Exactly one file matched — call \`get_wpf_theme_resource("${singlePath}")\` to read its XAML content._`);
+    } else {
+      out.push('', '_Call `get_wpf_theme_resource(path)` with any path above to read the full XAML content._');
+    }
+
+    const text = out.join('\n');
+    log('setup_wpf_theme', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+    return { content: [{ type: 'text' as const, text }] };
+  };
+}
+
+// ── get_wpf_theme_resource ────────────────────────────────────────────────────
+
+// Style files average ~60KB and can reach ~660KB; 8000 chars was well below one
+// full ControlTemplate. 24000 fits ~5-6k tokens — room for real content while
+// still capping the largest blobs.
+const MAX_THEME_FILE_CHARS = 24000;
+
+export function createGetWpfThemeResourceHandler(themeIndex: ThemeIndex, log: LogFn) {
+  return async (input: { path: string }): Promise<CallToolResult> => {
+    const start = performance.now();
+    const { path } = input;
+
+    const content = loadThemeResource(path);
+    if (content === null) {
+      const needle = path.split(/[\\/]/).pop()?.toLowerCase() ?? '';
+      const allFiles = [
+        ...themeIndex.newerThemes.flatMap(t => t.files),
+        ...themeIndex.legacyStyles.flatMap(s => s.files),
+      ];
+      const suggestions = allFiles
+        .filter(f => f.file.toLowerCase().includes(needle))
+        .slice(0, 5)
+        .map(f => `\`${f.path}\``);
+      const hint = suggestions.length > 0
+        ? ` Did you mean: ${suggestions.join(', ')}?`
+        : ` Call setup_wpf_theme to browse available paths — never guess this path.`;
+      const text = `Theme resource "${path}" not found.${hint}`;
+      log('get_wpf_theme_resource', input, text, Math.round(performance.now() - start));
+      return { content: [{ type: 'text', text }], isError: true };
+    }
+
+    const isNewerFamily = path.replace(/\\/g, '/').startsWith('Themes/');
+    const mechanismNote = isNewerFamily
+      ? '_Newer family: apply via `Infragistics.Themes.ThemeManager.ApplicationTheme = new <Name>Theme();` — do not merge this file directly into Application.Resources._'
+      : '_Legacy family: the named theme is already embedded in the component assembly — set `Theme="..."` on the control. Use this file to copy/override specific styles only._';
+
+    const truncated = content.length > MAX_THEME_FILE_CHARS;
+    const shown = truncated ? `${content.slice(0, MAX_THEME_FILE_CHARS)}\n<!-- truncated, ${content.length} chars total -->` : content;
+
+    const text = [
+      `# ${path}`,
+      '',
+      mechanismNote,
+      '',
+      '```xml',
+      shown,
+      '```',
+    ].join('\n');
+
+    log('get_wpf_theme_resource', input, text, Math.round(performance.now() - start));
+    return { content: [{ type: 'text' as const, text }] };
+  };
+}
+
+// ── get_wpf_theme_palette ─────────────────────────────────────────────────────
+
+/** One parsed palette entry from a `<Theme>.Theme.Colors.xaml` file. */
+interface PaletteEntry {
+  group: string;                 // section label from the file's own comments
+  kind: 'Color' | 'Brush';       // <Color> vs <SolidColorBrush>
+  key: string;                   // x:Key (e.g. "Color_024", "Brush01")
+  value: string;                 // hex or named color (e.g. "#FF00AADE", "White")
+  note?: string;                 // trailing inline <!-- comment --> if present
+}
+
+/** Clean a XAML comment used as a section header: strip decorative `*`/`-` runs. */
+function cleanGroupLabel(raw: string): string {
+  return raw.replace(/\*/g, '').replace(/^[-\s]+|[-\s]+$/g, '').trim();
+}
+
+/**
+ * Parses an Infragistics `<Theme>.Theme.Colors.xaml` palette dictionary into a
+ * flat, grouped list of the theme's `<Color>` and `<SolidColorBrush>` resources.
+ * Grouping is derived from the file's own standalone `<!-- ... -->` section
+ * comments (e.g. "Base Colors", "Theme Accent colors") — never guessed.
+ */
+function parsePalette(xaml: string): PaletteEntry[] {
+  const entries: PaletteEntry[] = [];
+  let group = 'General';
+
+  for (const line of xaml.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    // A standalone comment on its own line acts as a section header.
+    const headerMatch = /^<!--\s*(.*?)\s*-->$/.exec(trimmed);
+    if (headerMatch) {
+      const label = cleanGroupLabel(headerMatch[1]);
+      if (label) group = label;
+      continue;
+    }
+
+    // <SolidColorBrush x:Key="Brush01" Color="#FF00AADE" />  (optional trailing comment)
+    const brush = /<SolidColorBrush\s+x:Key="([^"]+)"\s+Color="([^"]+)"\s*\/>\s*(?:<!--\s*(.*?)\s*-->)?/.exec(trimmed);
+    if (brush) {
+      entries.push({ group, kind: 'Brush', key: brush[1], value: brush[2], note: brush[3]?.trim() || undefined });
+      continue;
+    }
+
+    // <Color x:Key="Color_010">#E5FFFFFF</Color>  <!--90% White-->
+    const color = /<Color\s+x:Key="([^"]+)"\s*>\s*([^<]+?)\s*<\/Color>\s*(?:<!--\s*(.*?)\s*-->)?/.exec(trimmed);
+    if (color) {
+      entries.push({ group, kind: 'Color', key: color[1], value: color[2], note: color[3]?.trim() || undefined });
+      continue;
+    }
+  }
+
+  return entries;
+}
+
+const PALETTE_FILE_SUFFIX = '.theme.colors.xaml';
+
+/** Themes that ship a re-tunable palette file, in the newer ThemeManager family. */
+function themesWithPalette(themeIndex: ThemeIndex): { theme: string; file: ThemeResourceFile }[] {
+  return themeIndex.newerThemes
+    .map(t => ({ theme: t.theme, file: t.files.find(f => f.file.toLowerCase().endsWith(PALETTE_FILE_SUFFIX)) }))
+    .filter((t): t is { theme: string; file: ThemeResourceFile } => t.file !== undefined);
+}
+
+const PALETTE_GUIDANCE = [
+  '## How to apply a re-tuned palette',
+  '',
+  'These keys are the single re-color surface for the **newer "Infragistics.Controls.*" family** (charts, gauges, etc.) applied via `Infragistics.Themes.ThemeManager`. To recolor the theme WITHOUT creating a new theme, override just the keys you want in your own `ResourceDictionary` and merge it into the theme load — do NOT invent new keys or rename existing ones.',
+  '',
+  '⚠️ **Load-order matters.** The theme references these colors from compiled BAML primitives via `StaticResource` (resolved once at parse time), so merging an override dictionary *after* the theme has already loaded may NOT recolor already-styled controls. Merge your override so it is present BEFORE `ThemeManager.ApplicationTheme` is set / before the first themed window is created (e.g. in `App.xaml.cs` before `base.OnStartup`).',
+  '',
+  '⚠️ **Newer family only.** Legacy "Infragistics.Windows.*" controls (XamDataGrid, XamRibbon, XamDockManager, ...) do NOT read this palette — their themes are embedded BAML applied via `Theme="..."`. Recolor those by copying individual Styles/ControlTemplates (see `setup_wpf_theme` / `get_wpf_theme_resource`).',
+  '',
+  '_This is a read-only introspection tool — it returns the real keys/values and a skeleton to copy; it does not modify your project._',
+].join('\n');
+
+/** Chooser guidance returned when no `theme` is supplied. */
+function buildPaletteChooser(themeNames: string[]): string {
+  return [
+    '# WPF Theme Palettes — pick a base theme',
+    '',
+    'These newer-family (ThemeManager) themes expose a re-tunable color palette:',
+    '',
+    ...themeNames.map(t => `- \`${t}\``),
+    '',
+    '## To re-color WITHOUT knowing the theme name',
+    '',
+    '1. **Detect the theme the app already uses** from the workspace, in priority order:',
+    '   - `App.xaml.cs` → `Infragistics.Themes.ThemeManager.ApplicationTheme = new <Name>Theme();`',
+    '   - the `.csproj` → an `Infragistics.WPF.Themes.<Name>.Trial` PackageReference',
+    '   - XAML → a `Theme="<Name>"` attribute',
+    '2. If you cannot detect it, **ask the user** which base theme they want — or simply whether they want a **dark** base (e.g. `MetroDark`, `RoyalDark`) or a **light** base (e.g. `Office2013`, `RoyalLight`, `Metro`, `IG`). _This tool cannot classify dark/light automatically — the palette files are not consistent enough to derive it reliably._',
+    '3. Call `get_wpf_theme_palette(theme)` with the chosen name to get its keys + a ready-to-merge override skeleton.',
+    '',
+    '_Concrete colors the user gives (e.g. "neon purple") are mapped to hex and assigned to the returned accent/chart-series keys by you — the tool only supplies the grounded keys._',
+  ].join('\n');
+}
+
+export function createGetWpfThemePaletteHandler(themeIndex: ThemeIndex, log: LogFn) {
+  return async (input: { theme?: string; filter?: string }): Promise<CallToolResult> => {
+    const start = performance.now();
+    const { theme, filter } = input;
+    const available = themesWithPalette(themeIndex);
+
+    // Chooser mode — no theme supplied: list palette-capable themes + detection guidance.
+    if (!theme || !theme.trim()) {
+      const text = buildPaletteChooser(available.map(t => t.theme));
+      log('get_wpf_theme_palette', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+      return { content: [{ type: 'text' as const, text }] };
+    }
+
+    const themeFilter = theme.toLowerCase().trim();
+    const exact = available.find(t => t.theme.toLowerCase() === themeFilter);
+    const substringMatches = available.filter(t => t.theme.toLowerCase().includes(themeFilter));
+    const match = exact ?? substringMatches[0];
+
+    if (!match) {
+      const names = available.map(t => `\`${t.theme}\``).join(', ');
+      const text = `No re-tunable palette found for theme "${theme}". Themes with a color palette (newer ThemeManager family): ${names}. Call setup_wpf_theme to browse all themes and style folders.`;
+      log('get_wpf_theme_palette', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+      return { content: [{ type: 'text', text }], isError: true };
+    }
+
+    const xaml = loadThemeResource(match.file.path);
+    if (xaml === null) {
+      const text = `Palette file "${match.file.path}" for theme "${match.theme}" could not be read.`;
+      log('get_wpf_theme_palette', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+      return { content: [{ type: 'text', text }], isError: true };
+    }
+
+    let entries = parsePalette(xaml);
+    const filterLower = filter?.toLowerCase().trim();
+    if (filterLower) {
+      entries = entries.filter(e =>
+        e.group.toLowerCase().includes(filterLower) ||
+        e.key.toLowerCase().includes(filterLower) ||
+        e.value.toLowerCase().includes(filterLower) ||
+        e.note?.toLowerCase().includes(filterLower));
+    }
+
+    if (entries.length === 0) {
+      const text = filterLower
+        ? `Theme "${match.theme}" has a palette, but no entries matched filter "${filter}". Omit \`filter\` to see the full palette.`
+        : `Theme "${match.theme}" palette file parsed to zero entries (unexpected format).`;
+      log('get_wpf_theme_palette', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+      return { content: [{ type: 'text', text }], isError: true };
+    }
+
+    // Preserve first-seen group order for stable, readable output.
+    const groupOrder: string[] = [];
+    const byGroup = new Map<string, PaletteEntry[]>();
+    for (const e of entries) {
+      if (!byGroup.has(e.group)) { byGroup.set(e.group, []); groupOrder.push(e.group); }
+      byGroup.get(e.group)!.push(e);
+    }
+
+    const out: string[] = [];
+    out.push(`# WPF Theme Palette — ${match.theme} (${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}${filterLower ? `, filter "${filter}"` : ''})`);
+    out.push('', `Source: \`${match.file.path}\``);
+
+    // Ambiguous substring input matched more than one theme — surface the alternatives.
+    if (!exact && substringMatches.length > 1) {
+      const others = substringMatches.slice(1).map(t => `\`${t.theme}\``).join(', ');
+      out.push('', `> ⚠️ "${theme}" matched ${substringMatches.length} themes; showing **${match.theme}**. Other matches: ${others}. Pass an exact theme name to pick a different one.`);
+    }
+
+    for (const g of groupOrder) {
+      const items = byGroup.get(g)!;
+      out.push('', `## ${g}`, '', '| Key | Value | Notes |', '| --- | --- | --- |');
+      for (const e of items) {
+        out.push(`| \`${e.key}\` | \`${e.value}\`${e.kind === 'Brush' ? ' _(brush)_' : ''} | ${e.note ?? ''} |`);
+      }
+    }
+
+    // Ready-to-merge override skeleton with the verbatim keys.
+    out.push('', '## Override skeleton', '',
+      '_Copy into a `ResourceDictionary`, change only the values you want, and merge it ahead of the theme load (see guidance below). Delete rows you are not changing._',
+      '', '```xml',
+      '<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"',
+      '                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">');
+    for (const g of groupOrder) {
+      out.push(`  <!-- ${g} -->`);
+      for (const e of byGroup.get(g)!) {
+        out.push(e.kind === 'Brush'
+          ? `  <SolidColorBrush x:Key="${e.key}" Color="${e.value}" />`
+          : `  <Color x:Key="${e.key}">${e.value}</Color>`);
+      }
+    }
+    out.push('</ResourceDictionary>', '```');
+
+    out.push('', PALETTE_GUIDANCE);
+
+    const text = out.join('\n');
+    log('get_wpf_theme_palette', input as Record<string, unknown>, text, Math.round(performance.now() - start));
     return { content: [{ type: 'text' as const, text }] };
   };
 }

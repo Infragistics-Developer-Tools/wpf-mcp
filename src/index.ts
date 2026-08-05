@@ -6,9 +6,9 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 import { TOOL_DESCRIPTIONS } from './tools/constants.js';
-import { listComponentsSchema, getApiReferenceSchema, searchApiSchema, getProjectScaffoldSchema, searchDocsSchema, getDocSchema } from './tools/schemas.js';
-import { createListComponentsHandler, createGetApiReferenceHandler, createSearchApiHandler, createGetProjectScaffoldHandler, createSearchDocsHandler, createGetDocHandler } from './tools/handlers.js';
-import type { ComponentEntry, SearchIndexEntry, DocIndexEntry } from './lib/types.js';
+import { listComponentsSchema, getApiReferenceSchema, searchApiSchema, getProjectScaffoldSchema, searchDocsSchema, getDocSchema, setupWpfThemeSchema, getWpfThemeResourceSchema, getWpfThemePaletteSchema } from './tools/schemas.js';
+import { createListComponentsHandler, createGetApiReferenceHandler, createSearchApiHandler, createGetProjectScaffoldHandler, createSearchDocsHandler, createGetDocHandler, createSetupWpfThemeHandler, createGetWpfThemeResourceHandler, createGetWpfThemePaletteHandler } from './tools/handlers.js';
+import type { ComponentEntry, SearchIndexEntry, DocIndexEntry, ThemeIndex } from './lib/types.js';
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
@@ -19,6 +19,9 @@ const searchIndex: SearchIndexEntry[] = require('./data/search-index.json');
 const docIndex: DocIndexEntry[] = existsSync(join(__dirname, 'data/docs-index.json'))
   ? require('./data/docs-index.json')
   : [];
+const themeIndex: ThemeIndex = existsSync(join(__dirname, 'data/theme-index.json'))
+  ? require('./data/theme-index.json')
+  : { newerThemes: [], legacyStyles: [] };
 
 // ── Debug logging ─────────────────────────────────────────────────────────────
 
@@ -45,8 +48,10 @@ const server = new McpServer(
         3. Whenever the task needs HOW-TO guidance beyond "what members exist" — layouts/nesting, styling/theming, data binding, editing/validation, filtering/sorting/grouping/summaries, exporting, performance, commands, known issues, etc. — call search_wpf_docs(query, control: component), passing the SAME component name from step 1/2 to scope the search.
         4. get_wpf_doc(slug) on the most relevant result from step 3 to read the full XAML example or how-to text before writing any code or giving usage advice.
         5. For new projects, get_project_scaffold(components) after step 1 for dotnet CLI + xmlns setup, then still run steps 2-4 per component before writing real XAML.
+        6. Establish the visual theme EARLY — treat it as a default step for any new window/app, not an optional afterthought. Call setup_wpf_theme(component?, theme?) to pick a named theme and get the exact ready-to-paste apply steps (NuGet package + App.xaml.cs ThemeManager call for the newer family, or Theme="<Name>" for the legacy family) plus the resource file paths; then get_wpf_theme_resource(path) only if you need to copy/override a specific Style/ControlTemplate. When the goal is to RE-COLOR an existing theme (change its palette) rather than restyle one control, call get_wpf_theme_palette(theme) for that theme's centralized color/brush keys and a ready-to-merge override skeleton.
 
       ALWAYS call list_wpf_components/search_wpf_api before writing any XAML to get the correct xmlns namespace URI; wrong values cause immediate compile errors.
+      ALWAYS establish a theme via setup_wpf_theme (then get_wpf_theme_palette to recolor if needed) BEFORE writing any Style, Setter, Brush, or color attribute on an Infragistics control. Do NOT hand-author a color scheme (dark, neon, corporate, etc.) to approximate a look — a named theme or palette override is the correct, lower-maintenance path.
       Never guess property names, child-element nesting, or other usage details (styling, data binding, performance, etc.) — verify through this chain rather than assuming from a similar control or from naming conventions.
     `,
   }
@@ -61,7 +66,7 @@ server.registerTool(
     annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
     inputSchema: listComponentsSchema,
   },
-  createListComponentsHandler(components, log)
+  createListComponentsHandler(components, themeIndex, log)
 );
 
 server.registerTool(
@@ -71,7 +76,7 @@ server.registerTool(
     annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
     inputSchema: getApiReferenceSchema,
   },
-  createGetApiReferenceHandler(components, log)
+  createGetApiReferenceHandler(components, themeIndex, log)
 );
 
 server.registerTool(
@@ -112,6 +117,36 @@ server.registerTool(
     inputSchema: getDocSchema,
   },
   createGetDocHandler(docIndex, log)
+);
+
+server.registerTool(
+  'setup_wpf_theme',
+  {
+    description: TOOL_DESCRIPTIONS.setup_wpf_theme,
+    annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
+    inputSchema: setupWpfThemeSchema,
+  },
+  createSetupWpfThemeHandler(themeIndex, log)
+);
+
+server.registerTool(
+  'get_wpf_theme_resource',
+  {
+    description: TOOL_DESCRIPTIONS.get_wpf_theme_resource,
+    annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
+    inputSchema: getWpfThemeResourceSchema,
+  },
+  createGetWpfThemeResourceHandler(themeIndex, log)
+);
+
+server.registerTool(
+  'get_wpf_theme_palette',
+  {
+    description: TOOL_DESCRIPTIONS.get_wpf_theme_palette,
+    annotations: { readOnlyHint: true, openWorldHint: false, idempotentHint: true },
+    inputSchema: getWpfThemePaletteSchema,
+  },
+  createGetWpfThemePaletteHandler(themeIndex, log)
 );
 
 // ── Transport ─────────────────────────────────────────────────────────────────
