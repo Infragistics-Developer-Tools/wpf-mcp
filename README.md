@@ -1,4 +1,4 @@
-# wpf-mcp
+     # wpf-mcp
 
 MCP server for **Infragistics NetAdvantage for WPF** — component registry, XAML namespace lookup, full API reference with property types and enum values, keyword search across 7,000+ types, and named-theme setup with palette re-coloring.
 
@@ -29,6 +29,44 @@ npm run build:all
 ```
 
 `build:all` downloads Infragistics NuGet packages, extracts type metadata via reflection, merges with XML docs, and compiles the server. Takes 2–5 minutes on first run (NuGet restore), fast after that.
+
+### Using a private or local NuGet feed
+
+By default, `npm run generate` (via the `docs:restore` script) restores the public **Trial** packages referenced in [`nuget/WpfDocs.csproj`](nuget/WpfDocs.csproj) from nuget.org. If you need to restore from a private feed (e.g. an internal package server) or an offline local folder feed instead, add a `nuget.config` file next to `WpfDocs.csproj` (i.e. in `nuget/nuget.config`) — `dotnet restore` picks it up automatically.
+
+**Local folder feed:**
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources>
+    <clear />
+    <add key="local-feed" value="C:\path\to\local\feed" />
+    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+  </packageSources>
+</configuration>
+```
+
+**Authenticated private feed:**
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources>
+    <clear />
+    <add key="private-feed" value="https://your-private-feed/index.json" />
+    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+  </packageSources>
+  <packageSourceCredentials>
+    <private-feed>
+      <add key="Username" value="%FEED_USERNAME%" />
+      <add key="ClearTextPassword" value="%FEED_PASSWORD%" />
+    </private-feed>
+  </packageSourceCredentials>
+</configuration>
+```
+
+Set `FEED_USERNAME` / `FEED_PASSWORD` as environment variables (or use `dotnet nuget add source --username --password --store-password-in-clear-text false` to store credentials securely instead). **Never commit a `nuget.config` containing real credentials** — add it to `.gitignore` if it holds anything other than placeholder env-var references.
 
 ## Claude Desktop configuration
 
