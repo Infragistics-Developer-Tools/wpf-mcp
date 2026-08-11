@@ -18,7 +18,9 @@
     "build:themes": "npx tsx scripts/build-themes.ts",
     "docs:update": "git submodule update --remote docs/docs-wpf docs/docs-common docs/wpf-resources",
     "build:all": "npm run generate && npm run build:docs && npm run build:themes && npm run build",
-    "inspector": "npx @modelcontextprotocol/inspector node dist/index.js"
+    "inspector": "npx @modelcontextprotocol/inspector node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -30,6 +32,7 @@
   "devDependencies": {
     "@types/node": "^22.20.1",
     "tsx": "^4.21.0",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "vitest": "^4.1.10"
   }
 }
