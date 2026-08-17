@@ -66,7 +66,7 @@ By default, `npm run generate` (via the `docs:restore` script) restores the publ
 </configuration>
 ```
 
-Set `FEED_USERNAME` / `FEED_PASSWORD` as environment variables (or use `dotnet nuget add source --username --password --store-password-in-clear-text false` to store credentials securely instead). **Never commit a `nuget.config` containing real credentials** — add it to `.gitignore` if it holds anything other than placeholder env-var references.
+Set `FEED_USERNAME` / `FEED_PASSWORD` as environment variables (or use `dotnet nuget add source https://your-private-feed/index.json --name private-feed --username %FEED_USERNAME% --password %FEED_PASSWORD%` to add the source; omit `--store-password-in-clear-text` to avoid clear-text storage). **Never commit a `nuget.config` containing real credentials** — add it to `.gitignore` if it holds anything other than placeholder env-var references.
 
 ## Claude Desktop configuration
 
