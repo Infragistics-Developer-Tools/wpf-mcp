@@ -1,4 +1,4 @@
-     # wpf-mcp
+# wpf-mcp
 
 MCP server for **Infragistics NetAdvantage for WPF** — component registry, XAML namespace lookup, full API reference with property types and enum values, keyword search across 7,000+ types, and named-theme setup with palette re-coloring.
 
