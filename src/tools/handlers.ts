@@ -88,12 +88,18 @@ function formatMember(m: { name: string; summary: string; typeName?: string; isE
   return line;
 }
 
-export function createGetApiReferenceHandler(components: ComponentEntry[], themeIndex: ThemeIndex, log: LogFn) {  return async (input: ApiReferenceInput): Promise<CallToolResult> => {
+export function createGetApiReferenceHandler(
+  components: ComponentEntry[],
+  themeIndex: ThemeIndex,
+  log: LogFn,
+  loadApiDocFn: (component: string) => ReturnType<typeof loadApiDoc> = loadApiDoc,
+) {
+  return async (input: ApiReferenceInput): Promise<CallToolResult> => {
     const start = performance.now();
     const { component, kind } = input;
 
     // load from pre-generated api/{ComponentName}.json
-    const doc = loadApiDoc(component);
+    const doc = loadApiDocFn(component);
     if (!doc) {
       const known = components.map(c => c.component).join(', ');
       const text = `Component "${component}" not found. Known Xam* controls: ${known}\n\nNote: Supporting types (FieldLayout, SummaryDefinition, etc.) are also available — use the exact type name.`;
@@ -451,12 +457,16 @@ const MAX_BODY_CHARS    = 6000;
 const MAX_SNIPPETS_SHOWN = 6;
 const MAX_SNIPPET_CHARS  = 3000;
 
-export function createGetDocHandler(docIndex: DocIndexEntry[], log: LogFn) {
+export function createGetDocHandler(
+  docIndex: DocIndexEntry[],
+  log: LogFn,
+  loadDocFn: (topic: string) => ReturnType<typeof loadDoc> = loadDoc,
+) {
   return async (input: { topic: string }): Promise<CallToolResult> => {
     const start = performance.now();
     const { topic } = input;
 
-    const doc = loadDoc(topic);
+    const doc = loadDocFn(topic);
     if (!doc) {
       const suggestions = docIndex
         .filter(e => e.slug.toLowerCase().includes(topic.toLowerCase()) || e.title.toLowerCase().includes(topic.toLowerCase()))
@@ -681,12 +691,16 @@ export function createSetupWpfThemeHandler(themeIndex: ThemeIndex, log: LogFn) {
 // still capping the largest blobs.
 const MAX_THEME_FILE_CHARS = 24000;
 
-export function createGetWpfThemeResourceHandler(themeIndex: ThemeIndex, log: LogFn) {
+export function createGetWpfThemeResourceHandler(
+  themeIndex: ThemeIndex,
+  log: LogFn,
+  loadThemeResourceFn: (path: string) => ReturnType<typeof loadThemeResource> = loadThemeResource,
+) {
   return async (input: { path: string }): Promise<CallToolResult> => {
     const start = performance.now();
     const { path } = input;
 
-    const content = loadThemeResource(path);
+    const content = loadThemeResourceFn(path);
     if (content === null) {
       const needle = path.split(/[\\/]/).pop()?.toLowerCase() ?? '';
       const allFiles = [
@@ -827,7 +841,11 @@ function buildPaletteChooser(themeNames: string[]): string {
   ].join('\n');
 }
 
-export function createGetWpfThemePaletteHandler(themeIndex: ThemeIndex, log: LogFn) {
+export function createGetWpfThemePaletteHandler(
+  themeIndex: ThemeIndex,
+  log: LogFn,
+  loadThemeResourceFn: (path: string) => ReturnType<typeof loadThemeResource> = loadThemeResource,
+) {
   return async (input: { theme?: string; filter?: string }): Promise<CallToolResult> => {
     const start = performance.now();
     const { theme, filter } = input;
@@ -852,7 +870,7 @@ export function createGetWpfThemePaletteHandler(themeIndex: ThemeIndex, log: Log
       return { content: [{ type: 'text', text }], isError: true };
     }
 
-    const xaml = loadThemeResource(match.file.path);
+    const xaml = loadThemeResourceFn(match.file.path);
     if (xaml === null) {
       const text = `Palette file "${match.file.path}" for theme "${match.theme}" could not be read.`;
       log('get_wpf_theme_palette', input as Record<string, unknown>, text, Math.round(performance.now() - start));
