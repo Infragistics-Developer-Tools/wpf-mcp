@@ -13,6 +13,8 @@ MCP server for **Infragistics NetAdvantage for WPF** — component registry, XAM
 | `setup_wpf_theme` | List available named themes and the raw XAML files backing them, covering both theming mechanisms (legacy embedded-BAML `Theme="..."` and newer `ThemeManager`). Returns ready-to-paste apply steps. Call first for any theming task. |
 | `get_wpf_theme_resource` | Retrieve the full raw XAML of one theme/style resource-dictionary file (real `Style`/`ControlTemplate`/brush definitions) to copy and override. Use the exact `path` from `setup_wpf_theme`. |
 | `get_wpf_theme_palette` | Return a newer-family (ThemeManager) theme's centralized color/brush palette — exact resource keys, values, and a ready-to-merge override skeleton — for re-coloring a theme without creating a new one. |
+| `search_wpf_docs` | Search 2,600+ how-to documentation topics by keyword and/or control name — layouts, styling, data binding, filtering/sorting/grouping, exporting, performance, known issues, etc. |
+| `get_wpf_doc` | Full text (including XAML samples) of one documentation topic by slug. Use the `slug` from a `search_wpf_docs` result. |
 
 ## Requirements
 
@@ -22,13 +24,17 @@ MCP server for **Infragistics NetAdvantage for WPF** — component registry, XAM
 ## Setup
 
 ```bash
-git clone <repo>
+git clone --recurse-submodules <repo>
 cd wpf-mcp
 npm install
 npm run build:all
 ```
 
-`build:all` downloads Infragistics NuGet packages, extracts type metadata via reflection, merges with XML docs, and compiles the server. Takes 2–5 minutes on first run (NuGet restore), fast after that.
+`build:all` downloads Infragistics NuGet packages, extracts type metadata via reflection, merges with XML docs, builds the docs/theme indexes, and compiles the server. Takes 2–5 minutes on first run (NuGet restore), fast after that.
+
+### Submodules (docs-wpf, docs-common, wpf-resources)
+
+`docs/docs-wpf`, `docs/docs-common`, and `docs/wpf-resources` are git submodules — they back `search_wpf_docs`/`get_wpf_doc` and `setup_wpf_theme`/`get_wpf_theme_resource`/`get_wpf_theme_palette`. If you cloned without `--recurse-submodules`, don't worry: `npm run build:all` (via `build:docs`/`build:themes`) auto-detects missing submodules and runs `git submodule update --init --recursive` for you, no manual step needed as long as you have network access to GitHub. If that still can't populate them (e.g. offline), the build aborts loudly with the exact fix command instead of silently shipping an empty docs/theme index. Run `npm run ensure-submodules` any time to check/fix this on its own.
 
 ### Using a private or local NuGet feed
 
@@ -68,9 +74,9 @@ By default, `npm run generate` (via the `docs:restore` script) restores the publ
 
 Set `FEED_USERNAME` / `FEED_PASSWORD` as environment variables (or use `dotnet nuget add source https://your-private-feed/index.json --name private-feed --username %FEED_USERNAME% --password %FEED_PASSWORD%` to add the source; omit `--store-password-in-clear-text` to avoid clear-text storage). **Never commit a `nuget.config` containing real credentials** — add it to `.gitignore` if it holds anything other than placeholder env-var references.
 
-## Claude Desktop configuration
+## MCP client configuration
 
-Add to `claude_desktop_config.json`:
+**Claude Desktop** — add to `claude_desktop_config.json`:
 
 ```json
 {
@@ -83,6 +89,21 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
+**VS Code (Copilot)** — add to `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "infragistics-wpf": {
+      "command": "node",
+      "args": ["C:/path/to/wpf-mcp/dist/index.js"]
+    }
+  }
+}
+```
+
+Add `"--debug"` to `args` for either client to log every tool call/response to `dist/wpf-mcp.log` — see [Troubleshooting](#troubleshooting).
+
 ## Data pipeline
 
 ```
@@ -93,20 +114,36 @@ NuGet packages (26.1.x)
                                                ↓
                                          build-api.ts
                                                ↓
-                                    src/data/api/*.json        (7,082 type files)
+                                    src/data/api/*.json        (7,084 type files)
                                     src/data/namespaces.json   (192 Xam* controls)
                                     src/data/search-index.json (search index)
+
+docs/docs-wpf + docs/docs-common submodules  →  build-docs.ts   →  src/data/docs-index.json + src/data/docs/*.json
+docs/wpf-resources submodule                 →  build-themes.ts →  src/data/theme-index.json + src/data/theme-resources/
 ```
+
+Every step above validates its own output before finishing: a submodule/package that's missing or produces zero usable data aborts the build loudly (with the exact fix command) instead of silently shipping an empty or degraded index.
 
 ## npm scripts
 
 | Script | What it does |
 |---|---|
-| `npm run build:all` | Full pipeline: NuGet restore → type extraction → API build → TypeScript compile |
-| `npm run generate` | API data only (no TypeScript compile) |
+| `npm run build:all` | Full pipeline: NuGet restore → type extraction → API build → docs build → themes build → TypeScript compile |
+| `npm run generate` | API data only: NuGet restore → type extraction → API build (no TypeScript compile) |
 | `npm run generate:types` | C# reflection extractor only → `nuget/type-info.json` |
+| `npm run docs:restore` | `dotnet restore` the trial NuGet packages referenced in `nuget/WpfDocs.csproj` |
+| `npm run build:docs` | Docs index only, from the `docs-wpf`/`docs-common` submodules (auto-inits them if missing) |
+| `npm run build:themes` | Theme index only, from the `wpf-resources` submodule (auto-inits it if missing) |
+| `npm run ensure-submodules` | Check/auto-init all 3 doc/theme submodules on their own, without building anything |
+| `npm run docs:update` | Pull the latest commit for all 3 doc/theme submodules |
 | `npm run build` | TypeScript compile only (requires `src/data/` to exist) |
 | `npm run inspector` | Launch MCP Inspector for interactive testing |
+
+## Troubleshooting
+
+- **A tool returns "no topics found" / "no themes found" for everything.** This used to mean the docs/theme submodules weren't initialized and silently built an empty index. As of the fail-loud guarantee above, a bad build now aborts instead of shipping — so if you're hitting this, the build likely never actually ran, or `dist/` predates this fix. Re-run `npm run build:all` and read the full output; it will either succeed with real counts ("Topics written: 2618", "8 newer themes, 45 legacy style folders", etc.) or abort with a 🚨-banner explaining exactly what's missing.
+- **Run the server with `--debug`** (add it to your MCP client config's `args`, see above) to log every tool call's input/output/timing to `dist/wpf-mcp.log` — useful for reproducing an agent's exact tool-calling sequence after the fact.
+- **A tool call succeeded but the answer looks wrong or a control seems missing** — this is usually stale/outdated data from Infragistics' own NuGet package (summaries, base types) rather than a bug in this server. Cross-check against `nuget/WpfDocs.csproj`'s pinned version before assuming the MCP itself is at fault.
 
 ## Development notes
 

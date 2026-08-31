@@ -34,6 +34,10 @@
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, statSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { ensureSubmodules } from './ensure-submodules.js';
+import { assertBuildStep } from './build-guard.js';
+
+ensureSubmodules();
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT                = join(__dirname, '..');
@@ -117,11 +121,6 @@ function toResourceFiles(srcDir: string, prefix: string, files: string[]): Theme
   }));
 }
 
-if (!existsSync(RESOURCES_DIR)) {
-  console.error(`wpf-resources submodule not found at ${RESOURCES_DIR}. Run: git submodule update --init docs/wpf-resources`);
-  process.exit(1);
-}
-
 // ── Newer "Infragistics.Controls.*" ThemeManager themes ──────────────────────
 
 const newerThemes: NewerThemeEntry[] = [];
@@ -148,4 +147,12 @@ mkdirSync(OUT_DATA_DIR, { recursive: true });
 writeFileSync(INDEX_FILE, JSON.stringify({ newerThemes, legacyStyles } satisfies ThemeIndex, null, 2));
 
 const totalFiles = newerThemes.reduce((n, t) => n + t.files.length, 0) + legacyStyles.reduce((n, s) => n + s.files.length, 0);
+
+assertBuildStep(totalFiles > 0,
+  `Submodule docs/wpf-resources is present, but 0 theme/style XAML files were found under ` +
+  `Themes/ or DefaultStyles/. This means the submodule is populated but its folder layout no ` +
+  `longer matches what this script expects — a data-shape drift, not a missing dependency. ` +
+  `Needs a code fix in build-themes.ts, not a submodule re-init.`
+);
+
 console.log(`theme-index.json: ${newerThemes.length} newer themes, ${legacyStyles.length} legacy style folders, ${totalFiles} XAML files total.`);

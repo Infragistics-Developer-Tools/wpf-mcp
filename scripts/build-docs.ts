@@ -16,6 +16,10 @@
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, statSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { ensureSubmodules } from './ensure-submodules.js';
+import { assertBuildStep } from './build-guard.js';
+
+ensureSubmodules();
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT            = join(__dirname, '..');
@@ -359,6 +363,13 @@ for (const { path, source } of files) {
 index.sort((a, b) => a.slug.localeCompare(b.slug));
 
 writeFileSync(INDEX_FILE, JSON.stringify(index, null, 2));
+
+assertBuildStep(written > 0,
+  `Submodules are present, but 0 doc topics were written (${files.length} .adoc files discovered, ` +
+  `${skipped} skipped). This means the submodules are populated but the parsing logic no longer ` +
+  `matches their real file layout/metadata format — a data-shape drift, not a missing dependency. ` +
+  `Needs a code fix in build-docs.ts, not a submodule re-init.`
+);
 
 console.log(`\nDone.`);
 console.log(`  Topics written : ${written}`);

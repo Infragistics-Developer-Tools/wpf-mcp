@@ -95,6 +95,13 @@ foreach (var dll in dllPaths) {
 }
 Console.Error.WriteLine($"[TypeExtractor] loaded {loaded.Count} assemblies");
 
+if (loaded.Count == 0) {
+    Console.Error.WriteLine($"[TypeExtractor] ERROR: 0 assemblies loaded from {dllPaths.Count} candidate DLL(s) in {packagesDir}");
+    Console.Error.WriteLine("This means the restore did not actually populate usable Infragistics.WPF.* packages (wrong feed, version mismatch, or a partial/failed restore).");
+    Console.Error.WriteLine("Check nuget/WpfDocs.csproj and your NuGet source config, then re-run: npm run docs:restore");
+    return 1;
+}
+
 // ── Phase 1: collect full→short name map and enum type set ───────────────────
 
 // fullName → shortName (simple class name without namespace)

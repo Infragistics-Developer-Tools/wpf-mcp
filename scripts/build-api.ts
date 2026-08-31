@@ -13,6 +13,7 @@
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, promises as fsPromises } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { assertBuildStep } from './build-guard.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT          = join(__dirname, '..');
@@ -134,6 +135,13 @@ function discoverXmlFiles(): XmlSource[] {
     }
   }
 
+  assertBuildStep(sources.length > 0,
+    `nuget/packages/ exists, but 0 Infragistics XML doc files were found inside it — the ` +
+    `restore ran but didn't actually populate any "infragistics.wpf*" packages (wrong feed, ` +
+    `version mismatch, or a partial/failed restore). Check nuget/WpfDocs.csproj and your NuGet ` +
+    `source config, then re-run: npm run docs:restore`
+  );
+
   return sources;
 }
 
@@ -183,10 +191,11 @@ interface TypeInfoEntry {
 
 function loadTypeInfo(): Record<string, TypeInfoEntry | string> {
   const path = join(ROOT, 'nuget', 'type-info.json');
-  if (!existsSync(path)) {
-    console.warn('type-info.json not found — run: npm run generate:types');
-    return {};
-  }
+  assertBuildStep(existsSync(path),
+    `nuget/type-info.json not found. Without it, every type's properties silently lose their ` +
+    `real typeName/isNullable/isEnum/enumValues/baseType — the build would still "succeed" but ` +
+    `quietly ship degraded API data. Run: npm run generate:types`
+  );
   const raw = readFileSync(path, 'utf-8');
   const result: Record<string, TypeInfoEntry | string> = {};
 
@@ -377,6 +386,12 @@ async function generate() {
     [...entries.entries()].map(([typeName, entry]) =>
       fsPromises.writeFile(join(API_OUT_DIR, `${typeName}.json`), JSON.stringify(entry), 'utf-8')
     )
+  );
+
+  assertBuildStep(entries.size > 0 && registry.length > 0,
+    `Discovered ${sources.length} XML doc file(s) but produced 0 API entries / registry components. ` +
+    `This means the XML files are present but their content no longer matches what this script ` +
+    `expects \u2014 a data-shape drift, not a missing dependency. Needs a code fix in build-api.ts.`
   );
 
   registry.sort((a, b) => a.component.localeCompare(b.component));
