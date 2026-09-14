@@ -1,0 +1,18 @@
+# Source and config
+src/
+scripts/
+nuget/
+docs/
+tsconfig.json
+server.json
+CLAUDE.md
+DEVELOPMENT.md
+.github/
+.gitmodules
+.env
+.env.*
+
+# Dev files
+node_modules/
+*.tgz
+*.log

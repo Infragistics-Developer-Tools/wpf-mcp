@@ -8,3 +8,5 @@ scripts/type-extractor/obj/
 *.log
 .env
 src/data/
+*.tgz
+nuget/nuget.config

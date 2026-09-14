@@ -1,0 +1,91 @@
+name: Npm.js publish
+on:
+  release:
+    types: [created]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # Generates the data set from scratch (nothing under src/data is committed),
+  # builds, tests, validates and packs. Windows only because of the type extractor.
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - run: echo "VERSION=${GITHUB_REF/refs\/tags\//}" >> $GITHUB_ENV
+      - run: echo ${VERSION}
+
+      - uses: ./.github/actions/build-data
+        with:
+          nuget-feed-url: ${{ secrets.NUGET_FEED_URL }}
+          nuget-feed-username: ${{ secrets.NUGET_FEED_USERNAME }}
+          nuget-feed-password: ${{ secrets.NUGET_FEED_PASSWORD }}
+
+      - name: Validate package contents
+        run: npm run validate:package -- --expected-version "$VERSION"
+
+      - name: Pack
+        run: npm pack
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: package
+          path: "*.tgz"
+          if-no-files-found: error
+          retention-days: 5
+
+  # Publishes exactly the tarball that was validated above — this job cannot rebuild.
+  # ubuntu so the npm/OIDC and MCP Registry steps stay identical to igniteui-cli.
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      # Only for server.json, which mcp-publisher reads from the working directory.
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: "https://registry.npmjs.org"
+
+      - run: echo "VERSION=${GITHUB_REF/refs\/tags\//}" >> $GITHUB_ENV
+      - run: echo ${VERSION}
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: package
+
+      - name: Define npm tag
+        run: |
+          if [[ ${VERSION} == *"alpha"* || ${VERSION} == *"beta"* || ${VERSION} == *"rc"* ]]; then
+            NPM_TAG=next
+          else
+            NPM_TAG=latest
+          fi
+          echo "NPM_TAG=$NPM_TAG" >> $GITHUB_ENV
+          echo "$NPM_TAG"
+
+      # Trusted publishing (OIDC): no NPM_TOKEN. The package must be configured on
+      # npmjs.com with this repository and workflow file as its trusted publisher.
+      - name: Publish package
+        run: npm publish ./*.tgz --tag ${NPM_TAG} --provenance
+
+      # MCP publishing. Skipped for prereleases — the MCP registry has no dist-tag
+      # equivalent, so publishing an alpha/beta/rc would make it the current version.
+      - name: Download MCP Publisher
+        if: ${{ !github.event.release.prerelease }}
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar -xz -f - mcp-publisher
+          chmod +x mcp-publisher
+      - name: Publish to MCP Registry
+        if: ${{ !github.event.release.prerelease }}
+        run: |
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
