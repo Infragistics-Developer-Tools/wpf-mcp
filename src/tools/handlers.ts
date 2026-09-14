@@ -115,10 +115,20 @@ export function createGetApiReferenceHandler(components: ComponentEntry[], theme
       `**xmlns:** \`xmlns:${doc.defaultPrefix}="${doc.xamlNamespace}"\``,
       `**NuGet:** \`${doc.nugetPackage}\``,
       `**Assembly:** \`${doc.assembly}\``,
+      `**Full type name:** \`${doc.dotnetNamespace}.${doc.component}\``,
       '',
       '## Summary',
       doc.summary || '_(no summary)_',
     ];
+
+    if (doc.alternates?.length) {
+      out.push(
+        '',
+        `⚠️ **"${doc.component}" is ambiguous** — ${doc.alternates.length} other Infragistics type(s) share this name, each in a different namespace/package with its own xmlns. This page documents \`${doc.dotnetNamespace}.${doc.component}\` (${doc.properties.length + doc.events.length + doc.methods.length} members), the most fully documented one. The others are not indexed separately:`,
+        ...doc.alternates.map(a => `- \`${a.fullName}\` — ${a.memberCount} members, NuGet \`${a.nugetPackage}\``),
+        `If the members below don't match the control you're using, you're likely on the other type — confirm which package/xmlns your project references before writing XAML.`,
+      );
+    }
 
     if (doc.remarks) out.push('', '## Remarks', doc.remarks);
 
@@ -183,7 +193,7 @@ export function createGetApiReferenceHandler(components: ComponentEntry[], theme
   };
 }
 
-// ── get_project_scaffold ─────────────────────────────────────────────────────
+// ── get_wpf_project_scaffold ─────────────────────────────────────────────────
 
 export function createGetProjectScaffoldHandler(components: ComponentEntry[], log: LogFn) {
   return async (input: { components: string[]; projectName?: string; framework?: string }): Promise<CallToolResult> => {
@@ -195,7 +205,7 @@ export function createGetProjectScaffoldHandler(components: ComponentEntry[], lo
       const text =
         `Invalid project name "${projectName}". ` +
         `Project names must start with a letter and contain only letters, digits, dots, underscores, or hyphens.`;
-      log('get_project_scaffold', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+      log('get_wpf_project_scaffold', input as Record<string, unknown>, text, Math.round(performance.now() - start));
       return { content: [{ type: 'text', text }], isError: true };
     }
 
@@ -228,8 +238,8 @@ export function createGetProjectScaffoldHandler(components: ComponentEntry[], lo
         `Cannot generate scaffold — none of the requested components were found in the registry.\n\n` +
         notFoundWarnings.map(w => `- ${w}`).join('\n') +
         `\n\nCall \`list_wpf_components\` (with an optional filter keyword) to get exact component names, ` +
-        `then call \`get_project_scaffold\` again with the correct names.`;
-      log('get_project_scaffold', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+        `then call \`get_wpf_project_scaffold\` again with the correct names.`;
+      log('get_wpf_project_scaffold', input as Record<string, unknown>, text, Math.round(performance.now() - start));
       return { content: [{ type: 'text', text }], isError: true };
     }
 
@@ -274,7 +284,7 @@ export function createGetProjectScaffoldHandler(components: ComponentEntry[], lo
     }
 
     const text = lines.join('\n');
-    log('get_project_scaffold', input as Record<string, unknown>, text, Math.round(performance.now() - start));
+    log('get_wpf_project_scaffold', input as Record<string, unknown>, text, Math.round(performance.now() - start));
     return { content: [{ type: 'text' as const, text }] };
   };
 }

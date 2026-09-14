@@ -1,14 +1,16 @@
 # wpf-mcp
 
-MCP server for **Infragistics NetAdvantage for WPF** — component registry, XAML namespace lookup, full API reference with property types and enum values, keyword search across 7,000+ types, and named-theme setup with palette re-coloring.
+MCP server for **Infragistics NetAdvantage for WPF** — component registry, XAML namespace lookup, full API reference with property types and enum values, keyword search across 6,900+ types, and named-theme setup with palette re-coloring.
 
 ## Tools
 
+All tools are read-only (`readOnlyHint: true`, `openWorldHint: false`) — none of them modify your project, filesystem, or any external system.
+
 | Tool | Description |
 |---|---|
-| `list_wpf_components` | List all 192 Xam* controls with canonical XAML namespace URIs, NuGet packages, and descriptions. Always call this first before writing XAML. |
-| `get_project_scaffold` | Generate ready-to-run `dotnet new` + `dotnet add package` + `dotnet restore` commands and xmlns declarations for a new WPF project. Pass component names resolved via `list_wpf_components`. |
-| `search_wpf_api` | Search across all 7,000+ types by keyword — matches type names, summaries, and member names. Use when you don't know the exact type name. |
+| `list_wpf_components` | List all 191 Xam* controls with canonical XAML namespace URIs, NuGet packages, and descriptions. Always call this first before writing XAML. |
+| `get_wpf_project_scaffold` | Generate ready-to-run `dotnet new` + `dotnet add package` + `dotnet restore` commands and xmlns declarations for a new WPF project. Pass component names resolved via `list_wpf_components`. |
+| `search_wpf_api` | Search across all 6,900+ types by keyword — matches type names, summaries, and member names. Use when you don't know the exact type name. |
 | `get_wpf_api_reference` | Full API reference for any type: properties with types and enum values, events, methods, and inherited members grouped by base class. |
 | `setup_wpf_theme` | List available named themes and the raw XAML files backing them, covering both theming mechanisms (legacy embedded-BAML `Theme="..."` and newer `ThemeManager`). Returns ready-to-paste apply steps. Call first for any theming task. |
 | `get_wpf_theme_resource` | Retrieve the full raw XAML of one theme/style resource-dictionary file (real `Style`/`ControlTemplate`/brush definitions) to copy and override. Use the exact `path` from `setup_wpf_theme`. |
@@ -102,7 +104,7 @@ Set `FEED_USERNAME` / `FEED_PASSWORD` as environment variables (or use `dotnet n
 }
 ```
 
-Add `"--debug"` to `args` for either client to log every tool call/response to `dist/wpf-mcp.log` — see [Troubleshooting](#troubleshooting).
+Add `"--debug"` to `args` for either client to log every tool call/response to `wpf-mcp.log` in your system temp folder (override with the `WPF_MCP_LOG` environment variable) — see [Troubleshooting](#troubleshooting).
 
 ## Data pipeline
 
@@ -114,8 +116,8 @@ NuGet packages (26.1.x)
                                                ↓
                                          build-api.ts
                                                ↓
-                                    src/data/api/*.json        (7,084 type files)
-                                    src/data/namespaces.json   (192 Xam* controls)
+                                    src/data/api/*.json        (6,907 type files)
+                                    src/data/namespaces.json   (191 Xam* controls)
                                     src/data/search-index.json (search index)
 
 docs/docs-wpf + docs/docs-common submodules  →  build-docs.ts   →  src/data/docs-index.json + src/data/docs/*.json
@@ -141,15 +143,9 @@ Every step above validates its own output before finishing: a submodule/package 
 
 ## Troubleshooting
 
-- **A tool returns "no topics found" / "no themes found" for everything.** This used to mean the docs/theme submodules weren't initialized and silently built an empty index. As of the fail-loud guarantee above, a bad build now aborts instead of shipping — so if you're hitting this, the build likely never actually ran, or `dist/` predates this fix. Re-run `npm run build:all` and read the full output; it will either succeed with real counts ("Topics written: 2618", "8 newer themes, 45 legacy style folders", etc.) or abort with a 🚨-banner explaining exactly what's missing.
-- **Run the server with `--debug`** (add it to your MCP client config's `args`, see above) to log every tool call's input/output/timing to `dist/wpf-mcp.log` — useful for reproducing an agent's exact tool-calling sequence after the fact.
+- **A tool returns "no topics found" / "no themes found" for everything.** This used to mean the docs/theme submodules weren't initialized and silently built an empty index. As of the fail-loud guarantee above, a bad build now aborts instead of shipping — so if you're hitting this, the build likely never actually ran, or `dist/` predates this fix. Re-run `npm run build:all` and read the full output; it will either succeed with real counts ("Topics written: 2678", "8 newer themes, 45 legacy style folders", etc.) or abort with a 🚨-banner explaining exactly what's missing.
+- **Run the server with `--debug`** (add it to your MCP client config's `args`, see above) to log every tool call's input/output/timing to `wpf-mcp.log` in your system temp folder — useful for reproducing an agent's exact tool-calling sequence after the fact. The exact path is printed to stderr on startup, and can be overridden with the `WPF_MCP_LOG` environment variable.
 - **A tool call succeeded but the answer looks wrong or a control seems missing** — this is usually stale/outdated data from Infragistics' own NuGet package (summaries, base types) rather than a bug in this server. Cross-check against `nuget/WpfDocs.csproj`'s pinned version before assuming the MCP itself is at fault.
-
-## Development notes
-
-- SDK: `@modelcontextprotocol/sdk` v1 (v2 releases ~July 28 2026 with breaking package renames)
-- Zod v3 schemas — upgrade to v4 when migrating to SDK v2
-- All tools are read-only (`readOnlyHint: true`, `openWorldHint: false`)
 
 ---
 
@@ -188,7 +184,7 @@ NuGet packages
 
 | File | Size | Loaded | Purpose |
 |---|---|---|---|
-| `src/data/namespaces.json` | ~50KB | At startup | 192 Xam* control registry |
+| `src/data/namespaces.json` | ~50KB | At startup | 191 Xam* control registry |
 | `src/data/search-index.json` | ~5MB | At startup | Compact index: name + summary + member names |
 | `src/data/api/{Type}.json` | ~5–15KB each | On demand | Full member details per type |
 

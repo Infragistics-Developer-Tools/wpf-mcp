@@ -10,7 +10,7 @@
  *   npm run generate       ← this script
  */
 
-import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, promises as fsPromises } from 'fs';
+import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, rmSync, promises as fsPromises } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { assertBuildStep } from './build-guard.js';
@@ -53,11 +53,36 @@ const EXCLUDE_SUFFIXES = [
 ];
 const EXCLUDE_CONTAINS = ['Internal', '<>', 'AnonymousType'];
 
+// XamXGrid is public and used internally for xplat components, but may
+// become customer-facing later, so this is a plain omission, not a "deprecated" label.
+const EXCLUDE_PACKAGES = ['infragistics.wpf.controls.grids.xamxgrid.trial'];
+
 function shouldExclude(typeName: string): boolean {
   return (
     EXCLUDE_SUFFIXES.some(s => typeName.endsWith(s)) ||
     EXCLUDE_CONTAINS.some(s => typeName.includes(s))
   );
+}
+
+/**
+ * Newest-first ordering for NuGet version folder names.
+ * A plain string sort ranks "26.1.9" above "26.1.21", so it picks the older package
+ * whenever two versions of the same package are present in nuget/packages.
+ */
+function byVersionDesc(a: string, b: string): number {
+  const pa = a.split(/[.\-+]/);
+  const pb = b.split(/[.\-+]/);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const na = Number(pa[i]);
+    const nb = Number(pb[i]);
+    if (Number.isInteger(na) && Number.isInteger(nb)) {
+      if (na !== nb) return nb - na;
+    } else {
+      const cmp = (pb[i] ?? '').localeCompare(pa[i] ?? '');
+      if (cmp !== 0) return cmp;
+    }
+  }
+  return 0;
 }
 
 // ── XML parsing ───────────────────────────────────────────────────────────────
@@ -115,7 +140,7 @@ function discoverXmlFiles(): XmlSource[] {
     if (!pkgName.startsWith('infragistics.wpf')) continue;
 
     const pkgDir = join(PACKAGES_DIR, pkgName);
-    const versions = readdirSync(pkgDir).sort().reverse();
+    const versions = readdirSync(pkgDir).sort(byVersionDesc);
     if (!versions.length) continue;
     const versionDir = join(pkgDir, versions[0]);
 
@@ -156,6 +181,12 @@ export interface ApiMemberEntry {
   declaredOn?: string;
 }
 
+export interface AlternateType {
+  fullName: string;
+  nugetPackage: string;
+  memberCount: number;
+}
+
 export interface ApiEntry {
   component: string;
   assembly: string;
@@ -167,6 +198,8 @@ export interface ApiEntry {
   remarks: string;
   /** Immediate base type name, if it is also an indexed Infragistics type. */
   baseType?: string;
+  /** Set only when other Infragistics types share this short name. */
+  alternates?: AlternateType[];
   properties: ApiMemberEntry[];
   events:     ApiMemberEntry[];
   methods:    ApiMemberEntry[];
@@ -280,15 +313,24 @@ function enrichWithInheritance(
 }
 
 async function generate() {
+  // Rebuilt from scratch every run so renamed/removed types can't linger as orphans.
+  rmSync(API_OUT_DIR, { recursive: true, force: true });
   mkdirSync(API_OUT_DIR, { recursive: true });
 
   const typeInfo = loadTypeInfo();
-  const sources = discoverXmlFiles();
+  const discovered = discoverXmlFiles();
+  const sources = discovered.filter(s => !EXCLUDE_PACKAGES.includes(s.packageId));
   console.log(`Scanning ${sources.length} XML documentation files...`);
 
-  const registry: RegistryEntry[] = [];
   const entries = new Map<string, ApiEntry>();
-  const seenTypes = new Set<string>();
+  // Entries are keyed by short type name, but short names are not unique across
+  // assemblies. Collisions are resolved case-INsensitively: type files are named after
+  // the key, so on Windows "strings" and "Strings" would otherwise be written to the
+  // same path concurrently and interleave into invalid JSON. loadApiDoc() also resolves
+  // names case-insensitively, so a case-variant twin is unreachable regardless.
+  const keyByLower = new Map<string, string>();
+  const memberCounts = new Map<string, number>();
+  const alternates = new Map<string, AlternateType[]>();
 
   for (let fileIdx = 0; fileIdx < sources.length; fileIdx++) {
     const { xmlPath, packageId } = sources[fileIdx];
@@ -329,8 +371,6 @@ async function generate() {
       if (!type.fullName.startsWith('Infragistics.')) continue;
       const typeName = type.name;
       if (shouldExclude(typeName)) continue;
-      if (seenTypes.has(typeName)) continue;
-      seenTypes.add(typeName);
 
       const dotnetNs = type.fullName.substring(0, type.fullName.lastIndexOf('.'));
       const bucket = typeMembers.get(type.fullName) ?? { props: [], events: [], methods: [] };
@@ -359,22 +399,47 @@ async function generate() {
                            .map(m => ({ name: m.name, summary: m.summary })),
       };
 
-      entries.set(typeName, entry);
+      const memberCount = entry.properties.length + entry.events.length + entry.methods.length;
+      const candidate: AlternateType = {
+        fullName: type.fullName,
+        nugetPackage: packageId,
+        memberCount,
+      };
+      const lower = typeName.toLowerCase();
+      const incumbentKey = keyByLower.get(lower);
 
-      // Registry: Xam* controls only (used by list_wpf_components)
-      if (typeName.startsWith('Xam')) {
-        registry.push({
-          component:      typeName,
-          xamlNamespace:  xmlnsInfo.xmlns,
-          defaultPrefix:  xmlnsInfo.prefix,
-          dotnetNamespace: dotnetNs,
-          nugetPackage:   packageId,
-          assembly:       assemblyName,
-          description:    type.summary,
-        });
+      if (incumbentKey === undefined) {
+        entries.set(typeName, entry);
+        keyByLower.set(lower, typeName);
+        memberCounts.set(lower, memberCount);
+      } else {
+        // Two different types share this short name. Discovery order is just
+        // package-alphabetical, which surfaces stub types over the real control
+        // (e.g. a 20-member XamComboEditor beating the 125-member one), so keep
+        // whichever documents more members and record the other as an alternate.
+        const incumbent = entries.get(incumbentKey)!;
+        if (!alternates.has(lower)) alternates.set(lower, []);
+
+        if (memberCount > memberCounts.get(lower)!) {
+          alternates.get(lower)!.push({
+            fullName: `${incumbent.dotnetNamespace}.${incumbent.component}`,
+            nugetPackage: incumbent.nugetPackage,
+            memberCount: memberCounts.get(lower)!,
+          });
+          entries.delete(incumbentKey);
+          entries.set(typeName, entry);
+          keyByLower.set(lower, typeName);
+          memberCounts.set(lower, memberCount);
+        } else {
+          alternates.get(lower)!.push(candidate);
+        }
       }
-    }
-    console.log(`${Date.now() - t0}ms  (${members.length} members)`);
+    }    console.log(`${Date.now() - t0}ms  (${members.length} members)`);
+  }
+
+  for (const [lower, alts] of alternates) {
+    const winner = entries.get(keyByLower.get(lower)!);
+    if (winner) winner.alternates = alts.sort((a, b) => b.memberCount - a.memberCount);
   }
 
   // Enrich in-memory, then write everything at once
@@ -386,6 +451,27 @@ async function generate() {
     [...entries.entries()].map(([typeName, entry]) =>
       fsPromises.writeFile(join(API_OUT_DIR, `${typeName}.json`), JSON.stringify(entry), 'utf-8')
     )
+  );
+
+  // Built from the resolved winners, not during discovery, so a type that loses a
+  // short-name collision can't leave a stale registry entry behind.
+  const registry: RegistryEntry[] = [...entries.values()]
+    .filter(e => e.component.startsWith('Xam'))
+    .map(e => ({
+      component:       e.component,
+      xamlNamespace:   e.xamlNamespace,
+      defaultPrefix:   e.defaultPrefix,
+      dotnetNamespace: e.dotnetNamespace,
+      nugetPackage:    e.nugetPackage,
+      assembly:        e.assembly,
+      description:     e.summary,
+    }));
+
+  assertBuildStep(
+    new Set([...entries.keys()].map(k => k.toLowerCase())).size === entries.size,
+    `Two API entries differ only in letter case. Their .json files would collide on a ` +
+    `case-insensitive filesystem and interleave into invalid JSON — the collision resolution ` +
+    `in generate() must stay case-insensitive.`
   );
 
   assertBuildStep(entries.size > 0 && registry.length > 0,

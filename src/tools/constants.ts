@@ -6,7 +6,7 @@ Call this FIRST when the user names (or is looking for) a Xam* control — befor
 Returns one entry per component: name, xmlns URI, prefix, NuGet package, and description. The exact \`component\` name returned is the key that chains into every other tool — reuse it verbatim:
   • get_wpf_api_reference(component) — full member list
   • search_wpf_docs(query, control: component) — how-to topics scoped to this control
-  • get_project_scaffold(components: [component, ...]) — project setup
+  • get_wpf_project_scaffold(components: [component, ...]) — project setup
   • setup_wpf_theme(component) — named themes and style/resource files for this control
 
 Entries that ship named themes (legacy embedded-BAML \`Theme="..."\` styles or newer ThemeManager themes) are flagged inline with "🎨 Ships with named themes" and the exact \`setup_wpf_theme(component: "...")\` call to make — check that marker before assuming a control needs hand-written Style/ControlTemplate overrides for dark mode, brand colors, or any other visual change.
@@ -23,7 +23,7 @@ When a type has Brush-typed properties (e.g. Foreground, Background, Stroke) AND
 
 ⚠️ Property names here are authoritative, but this tool only lists members — it does not show how properties combine in real XAML, which child elements a container accepts, or how to approach data binding, editing, performance, or other non-visual usage concerns. Never guess a property name from what sounds plausible — look it up here first. Before writing non-trivial XAML or giving configuration/usage advice, pass the same component name to search_wpf_docs(query, control: component) to find a relevant topic then get_wpf_doc(slug) to read the full working example — for styling/theming specifically, prefer the hint above (or call setup_wpf_theme directly) over search_wpf_docs, which has little to no theming coverage for many newer-family controls.`,
 
-  get_project_scaffold: `Generate dotnet CLI setup commands and XAML xmlns declarations for a new Infragistics WPF project.
+  get_wpf_project_scaffold: `Generate dotnet CLI setup commands and XAML xmlns declarations for a new Infragistics WPF project.
 
 Call this when a user wants to start a new WPF project. Pass component names resolved via list_wpf_components. Returns:
   • dotnet new, dotnet add package, and dotnet restore commands

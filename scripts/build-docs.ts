@@ -13,8 +13,8 @@
  * Run:  npx tsx scripts/build-docs.ts
  */
 
-import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, statSync } from 'fs';
-import { join, dirname } from 'path';
+import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, rmSync, statSync } from 'fs';
+import { join, dirname, basename } from 'path';
 import { fileURLToPath } from 'url';
 import { ensureSubmodules } from './ensure-submodules.js';
 import { assertBuildStep } from './build-guard.js';
@@ -104,9 +104,16 @@ function loadWpfVariables(): Map<string, string> {
 
 const WPF_VARS = loadWpfVariables();
 
-/** Replace {VarName} placeholders using the resolved WPF variable table; unresolved ones are dropped. */
+/**
+ * Replace {VarName} placeholders using the resolved WPF variable table.
+ *
+ * Unknown tokens are left verbatim, never blanked: the same `{Token}` syntax is used by
+ * XAML (`{Binding}`), .NET format strings (`{0}`), chart label templates (`{Item}`,
+ * `{Date}`) and AsciiDoc attributes (`{nbsp}`), none of which are DocsConfig variables.
+ * Deleting them silently corrupts code samples; leaving them is at worst cosmetic.
+ */
 function resolveVars(text: string): string {
-  return text.replace(/\{([A-Za-z0-9_.-]+)\}/g, (whole, name) => WPF_VARS.get(name) ?? '');
+  return text.replace(/\{([A-Za-z0-9_.-]+)\}/g, (whole, name) => WPF_VARS.get(name) ?? whole);
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -132,6 +139,9 @@ export interface DocEntry extends DocIndexEntry {
 }
 
 // ── AsciiDoc helpers ──────────────────────────────────────────────────────────
+
+// Matches a localized sibling such as "datagrid-column-pinning.ja-JP".
+const LOCALIZED_FILE = /\.[a-z]{2}-[A-Z]{2}$/;
 
 /** Extract the JSON metadata block: |metadata| { ... } |metadata| */
 function parseMetadata(raw: string): AdocMetadata | null {
@@ -254,13 +264,19 @@ function processFile(filePath: string, source: 'wpf' | 'common'): DocEntry | nul
   // resolved text (e.g. "XamCategoryChart" instead of "{CategoryChartName}").
   raw = resolveVars(raw);
 
-  const meta = parseMetadata(raw);
-  if (!meta?.name) return null;
+  const meta  = parseMetadata(raw);
+  const title = extractTitle(raw);
 
-  const slug         = meta.name.trim();
-  const title        = extractTitle(raw);
-  const controlNames = (meta.controlName ?? []).map(s => s.trim()).filter(Boolean);
-  const tags         = (meta.tags ?? []).map(s => s.trim()).filter(Boolean);
+  // Some real topics (the whole financial-chart family, several data-chart ones) carry no
+  // `name` in their metadata block. Fall back to the filename rather than dropping them,
+  // but only when the file has a real heading — untitled files are fragments and data
+  // dumps — and never for a localized copy, whose slug would duplicate the English topic.
+  const fileSlug = basename(filePath, '.adoc');
+  if (!meta?.name && (!title || LOCALIZED_FILE.test(fileSlug))) return null;
+
+  const slug         = meta?.name?.trim() || fileSlug;
+  const controlNames = (meta?.controlName ?? []).map(s => s.trim()).filter(Boolean);
+  const tags         = (meta?.tags ?? []).map(s => s.trim()).filter(Boolean);
   const xamlSnippets = extractXamlSnippets(raw);
   const body         = stripAdoc(raw);
 
@@ -323,13 +339,14 @@ function discoverFiles(): FileSource[] {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
-if (!existsSync(OUT_DIR)) mkdirSync(OUT_DIR, { recursive: true });
+// Rebuilt from scratch every run so renamed/removed topics can't linger as orphans.
+rmSync(OUT_DIR, { recursive: true, force: true });
+mkdirSync(OUT_DIR, { recursive: true });
 
 const files = discoverFiles();
 console.log(`Discovered ${files.length} .adoc files  (wpf + common)`);
 
 const index: DocIndexEntry[] = [];
-let written = 0;
 let skipped = 0;
 const slugSeen = new Set<string>();
 
@@ -356,7 +373,6 @@ for (const { path, source } of files) {
   );
 
   index.push(indexEntry);
-  written++;
 }
 
 // Sort index alphabetically by slug for deterministic output
@@ -364,15 +380,21 @@ index.sort((a, b) => a.slug.localeCompare(b.slug));
 
 writeFileSync(INDEX_FILE, JSON.stringify(index, null, 2));
 
-assertBuildStep(written > 0,
+assertBuildStep(index.length > 0,
   `Submodules are present, but 0 doc topics were written (${files.length} .adoc files discovered, ` +
   `${skipped} skipped). This means the submodules are populated but the parsing logic no longer ` +
   `matches their real file layout/metadata format — a data-shape drift, not a missing dependency. ` +
   `Needs a code fix in build-docs.ts, not a submodule re-init.`
 );
 
+assertBuildStep(
+  new Set(index.map(e => e.slug.toLowerCase())).size === index.length,
+  `Two topics have slugs differing only in letter case. Their .json files collide on a ` +
+  `case-insensitive filesystem, so one would silently overwrite the other.`
+);
+
 console.log(`\nDone.`);
-console.log(`  Topics written : ${written}`);
+console.log(`  Topics written : ${index.length}`);
 console.log(`  Skipped        : ${skipped}  (no metadata or empty)`);
 console.log(`  Index          : ${INDEX_FILE}`);
-console.log(`  Full content   : ${OUT_DIR}/  (${written} files)`);
+console.log(`  Full content   : ${OUT_DIR}/  (${index.length} files)`);

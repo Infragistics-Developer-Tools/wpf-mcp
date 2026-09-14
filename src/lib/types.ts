@@ -18,6 +18,13 @@ export interface ApiMemberEntry {
   declaredOn?: string;
 }
 
+/** A type that shares its short name with an indexed type but lost the name to it. */
+export interface AlternateType {
+  fullName: string;
+  nugetPackage: string;
+  memberCount: number;
+}
+
 export interface ApiEntry {
   component: string;
   assembly: string;
@@ -29,6 +36,8 @@ export interface ApiEntry {
   remarks: string;
   /** Immediate base type name, if it is also an indexed Infragistics type. Drives generic "check the base class" guidance. */
   baseType?: string;
+  /** Set only when other Infragistics types share this short name. */
+  alternates?: AlternateType[];
   properties: ApiMemberEntry[];
   events:     ApiMemberEntry[];
   methods:    ApiMemberEntry[];
