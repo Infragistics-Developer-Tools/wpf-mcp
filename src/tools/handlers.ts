@@ -31,12 +31,27 @@ export function createListComponentsHandler(components: ComponentEntry[], themeI
     const start = performance.now();
     const { filter } = input;
 
+    // Relevance scoring so a name match (e.g. "XamGrid" for filter "grid") always outranks
+    // a weak match that only comes from the NuGet package name (e.g. "XamEventTrigger" living
+    // in the "infragistics.wpf.pivotgrid.trial" package, which contains "grid" as a substring).
+    // Without this, results were left in their original alphabetical order and package-only
+    // matches from unrelated helper classes could out-rank the actual control being searched for.
+    function matchScore(c: ComponentEntry, needle: string): number {
+      const name = c.component.toLowerCase();
+      if (name === needle) return 4;
+      if (name.startsWith(needle)) return 3;
+      if (name.includes(needle)) return 2;
+      if (c.description.toLowerCase().includes(needle)) return 1;
+      if (c.nugetPackage.toLowerCase().includes(needle)) return 0.5;
+      return 0;
+    }
+
     const matches = filter
-      ? components.filter(c =>
-          c.component.toLowerCase().includes(filter.toLowerCase()) ||
-          c.description.toLowerCase().includes(filter.toLowerCase()) ||
-          c.nugetPackage.toLowerCase().includes(filter.toLowerCase())
-        )
+      ? components
+          .map(c => ({ c, score: matchScore(c, filter.toLowerCase()) }))
+          .filter(m => m.score > 0)
+          .sort((a, b) => b.score - a.score || a.c.component.localeCompare(b.c.component))
+          .map(m => m.c)
       : components;
 
     if (matches.length === 0) {
@@ -562,6 +577,20 @@ function newerApplyBlock(theme: string): string {
   ].join('\n');
 }
 
+// Built-in WPF framework types used as TargetType inside nearly every ControlTemplate
+// (e.g. almost every custom control's template roots in a <Grid>) — an exact match on one
+// of these is not a meaningful "this file is about that control" signal, so a component
+// filter equal to one of these words is restricted to filename matching only. Without this,
+// component: "grid" would also pull in xamDataChart.xaml / xamGeographicMap.xaml etc. just
+// because their templates happen to use a <Grid> panel somewhere.
+const GENERIC_WPF_TARGET_TYPES = new Set([
+  'grid', 'border', 'button', 'textblock', 'textbox', 'path', 'rectangle', 'ellipse',
+  'canvas', 'stackpanel', 'contentcontrol', 'itemscontrol', 'listbox', 'listboxitem',
+  'scrollviewer', 'togglebutton', 'repeatbutton', 'thumb', 'popup', 'image', 'label',
+  'checkbox', 'radiobutton', 'combobox', 'comboboxitem', 'expander', 'gridsplitter',
+  'menuitem', 'progressbar', 'slider', 'tabitem', 'tabcontrol', 'treeviewitem', 'treeview',
+]);
+
 function formatResourceFiles(files: ThemeResourceFile[], limit: number, componentFilter?: string): string[] {
   const shown = files.slice(0, limit);
   const lines = shown.map(f => {
@@ -611,7 +640,7 @@ export function createSetupWpfThemeHandler(themeIndex: ThemeIndex, log: LogFn) {
         files: t.files.filter(f =>
           !componentFilter ||
           f.file.toLowerCase().includes(componentFilter) ||
-          f.targetTypes.some(tt => tt.toLowerCase() === componentFilter)
+          (!GENERIC_WPF_TARGET_TYPES.has(componentFilter) && f.targetTypes.some(tt => tt.toLowerCase() === componentFilter))
         ),
       }))
       .filter(t => t.files.length > 0);
@@ -628,7 +657,7 @@ export function createSetupWpfThemeHandler(themeIndex: ThemeIndex, log: LogFn) {
           const componentOk =
             folderMatchesComponent ||
             nameLower.includes(componentFilter ?? '') ||
-            f.targetTypes.some(tt => tt.toLowerCase() === componentFilter);
+            (!!componentFilter && !GENERIC_WPF_TARGET_TYPES.has(componentFilter) && f.targetTypes.some(tt => tt.toLowerCase() === componentFilter));
           const themeOk = !themeFilter || nameLower.includes(themeFilter);
           return componentOk && themeOk;
         });
