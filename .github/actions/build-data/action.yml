@@ -1,0 +1,104 @@
+name: Build data and package
+description: >
+  Restores the Infragistics NuGet packages, runs the full data pipeline
+  (type extractor → API → docs → themes), compiles the server and runs the
+  smoke test. Windows only — the type extractor loads WPF assemblies.
+  Shared by nodejs.yml and npm-publish.yml so the two can never drift.
+
+inputs:
+  node-version:
+    description: Node.js version
+    default: "24"
+  nuget-feed-url:
+    description: Infragistics private NuGet feed (v3 index URL). Empty restores from nuget.org.
+    default: ""
+  nuget-feed-username:
+    description: Username for the private feed
+    default: ""
+  nuget-feed-password:
+    description: Password / API key for the private feed
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v7
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: npm
+
+    - uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: 8.0.x
+
+    # nuget/nuget.config is gitignored; it is written here only when the feed
+    # secrets are present (they are not on pull requests from forks, which then
+    # restore the public Trial packages from nuget.org). Credentials are left as
+    # %ENV% placeholders that NuGet expands at restore time, so they never touch
+    # disk or the log.
+    - name: Configure private NuGet feed
+      if: inputs.nuget-feed-url != ''
+      shell: bash
+      env:
+        NUGET_FEED_URL: ${{ inputs.nuget-feed-url }}
+      run: |
+        cat > nuget/nuget.config <<XML
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <packageSources>
+            <clear />
+            <add key="infragistics" value="${NUGET_FEED_URL}" />
+            <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+          </packageSources>
+          <packageSourceCredentials>
+            <infragistics>
+              <add key="Username" value="%NUGET_FEED_USERNAME%" />
+              <add key="ClearTextPassword" value="%NUGET_FEED_PASSWORD%" />
+            </infragistics>
+          </packageSourceCredentials>
+          <packageSourceMapping>
+            <packageSource key="infragistics">
+              <package pattern="Infragistics.*" />
+            </packageSource>
+            <packageSource key="nuget.org">
+              <package pattern="*" />
+            </packageSource>
+          </packageSourceMapping>
+        </configuration>
+        XML
+        echo "Restoring Infragistics.* from the private feed, everything else from nuget.org"
+
+    # The restore is the slowest step by far (88 packages). Keyed on the csproj so
+    # a version bump is the only thing that invalidates it.
+    - name: Cache NuGet packages
+      uses: actions/cache@v6
+      with:
+        path: nuget/packages
+        key: nuget-${{ runner.os }}-${{ hashFiles('nuget/WpfDocs.csproj') }}
+
+    # The extractor's output depends only on the packages and its own source;
+    # scripts/generate.ts skips the dotnet run when this file is newer than both.
+    - name: Cache extracted type info
+      uses: actions/cache@v6
+      with:
+        path: nuget/type-info.json
+        key: type-info-${{ runner.os }}-${{ hashFiles('nuget/WpfDocs.csproj', 'scripts/type-extractor/**') }}
+
+    - name: Install packages
+      shell: bash
+      run: npm ci
+
+    - name: Type-check
+      shell: bash
+      run: npm run typecheck
+
+    - name: Build data and server
+      shell: bash
+      env:
+        NUGET_FEED_USERNAME: ${{ inputs.nuget-feed-username }}
+        NUGET_FEED_PASSWORD: ${{ inputs.nuget-feed-password }}
+      run: npm run build:all
+
+    - name: Smoke test
+      shell: bash
+      run: npm test
