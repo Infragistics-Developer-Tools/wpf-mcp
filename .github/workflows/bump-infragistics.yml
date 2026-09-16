@@ -1,0 +1,80 @@
+name: Bump Infragistics data sources
+
+# Opens a PR that moves the data sources forward: the pinned Infragistics NuGet
+# version in nuget/WpfDocs.csproj and/or the three docs/theme submodules. The data
+# itself is never committed — CI on the PR regenerates it from these pointers and
+# proves the new version still builds, passes the smoke test and validates.
+# Nothing is pushed to a protected branch and nothing auto-merges.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Infragistics NuGet version to pin (e.g. 26.1.30). Empty keeps the current one.
+        type: string
+        default: ""
+      update-submodules:
+        description: Move docs-wpf, docs-common and wpf-resources to their latest commit
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Pin NuGet version
+        if: ${{ inputs.version != '' }}
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]] || { echo "::error::'$VERSION' is not a NuGet version"; exit 1; }
+          sed -i -E "s/(<PackageReference [^>]*Version=\")[^\"]+(\")/\1${VERSION}\2/" nuget/WpfDocs.csproj
+          grep -c "Version=\"${VERSION}\"" nuget/WpfDocs.csproj
+
+      - name: Update submodules
+        if: ${{ inputs.update-submodules }}
+        run: npm run docs:update
+
+      - name: Commit and open pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          git add nuget/WpfDocs.csproj docs/docs-wpf docs/docs-common docs/wpf-resources
+          if git diff --cached --quiet; then
+            echo "Nothing to bump — sources are already up to date."
+            exit 0
+          fi
+
+          LABEL="${VERSION:-submodules}"
+          BRANCH="chore/infragistics-${LABEL}-${{ github.run_id }}"
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git checkout -b "$BRANCH"
+          git commit -m "chore(data): bump Infragistics sources (${LABEL})"
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --base "${{ github.ref_name }}" \
+            --head "$BRANCH" \
+            --title "chore(data): bump Infragistics sources (${LABEL})" \
+            --body "Automated bump of the data sources the package is generated from.
+
+          | | |
+          |---|---|
+          | NuGet version | \`${VERSION:-unchanged}\` |
+          | submodules updated | \`${{ inputs.update-submodules }}\` |
+          | run | [#${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |
+
+          CI regenerates the full data set from these pointers and runs the smoke test and package validation.
+
+          Requires manual review and merge."

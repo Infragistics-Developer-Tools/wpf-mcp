@@ -18,63 +18,13 @@ All tools are read-only (`readOnlyHint: true`, `openWorldHint: false`) — none 
 | `search_wpf_docs` | Search 2,600+ how-to documentation topics by keyword and/or control name — layouts, styling, data binding, filtering/sorting/grouping, exporting, performance, known issues, etc. |
 | `get_wpf_doc` | Full text (including XAML samples) of one documentation topic by slug. Use the `slug` from a `search_wpf_docs` result. |
 
-## Requirements
+## Installation
 
-- **Node.js** ≥ 18
-- **.NET 8 SDK** — required for the first-time build
-
-## Setup
+Published to npm as [`@infragistics/wpf-mcp-server`](https://www.npmjs.com/package/@infragistics/wpf-mcp-server) and to the [MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.Infragistics-Developer-Tools/wpf-mcp`. Requires **Node.js ≥ 20**; nothing else — all Infragistics data ships inside the package.
 
 ```bash
-git clone --recurse-submodules <repo>
-cd wpf-mcp
-npm install
-npm run build:all
+npx -y @infragistics/wpf-mcp-server
 ```
-
-`build:all` downloads Infragistics NuGet packages, extracts type metadata via reflection, merges with XML docs, builds the docs/theme indexes, and compiles the server. Takes 2–5 minutes on first run (NuGet restore), fast after that.
-
-### Submodules (docs-wpf, docs-common, wpf-resources)
-
-`docs/docs-wpf`, `docs/docs-common`, and `docs/wpf-resources` are git submodules — they back `search_wpf_docs`/`get_wpf_doc` and `setup_wpf_theme`/`get_wpf_theme_resource`/`get_wpf_theme_palette`. If you cloned without `--recurse-submodules`, don't worry: `npm run build:all` (via `build:docs`/`build:themes`) auto-detects missing submodules and runs `git submodule update --init --recursive` for you, no manual step needed as long as you have network access to GitHub. If that still can't populate them (e.g. offline), the build aborts loudly with the exact fix command instead of silently shipping an empty docs/theme index. Run `npm run ensure-submodules` any time to check/fix this on its own.
-
-### Using a private or local NuGet feed
-
-By default, `npm run generate` (via the `docs:restore` script) restores the public **Trial** packages referenced in [`nuget/WpfDocs.csproj`](nuget/WpfDocs.csproj) from nuget.org. If you need to restore from a private feed (e.g. an internal package server) or an offline local folder feed instead, add a `nuget.config` file next to `WpfDocs.csproj` (i.e. in `nuget/nuget.config`) — `dotnet restore` picks it up automatically.
-
-**Local folder feed:**
-
-```xml
-<?xml version="1.0" encoding="utf-8"?>
-<configuration>
-  <packageSources>
-    <clear />
-    <add key="local-feed" value="C:\path\to\local\feed" />
-    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
-  </packageSources>
-</configuration>
-```
-
-**Authenticated private feed:**
-
-```xml
-<?xml version="1.0" encoding="utf-8"?>
-<configuration>
-  <packageSources>
-    <clear />
-    <add key="private-feed" value="https://your-private-feed/index.json" />
-    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
-  </packageSources>
-  <packageSourceCredentials>
-    <private-feed>
-      <add key="Username" value="%FEED_USERNAME%" />
-      <add key="ClearTextPassword" value="%FEED_PASSWORD%" />
-    </private-feed>
-  </packageSourceCredentials>
-</configuration>
-```
-
-Set `FEED_USERNAME` / `FEED_PASSWORD` as environment variables (or use `dotnet nuget add source https://your-private-feed/index.json --name private-feed --username %FEED_USERNAME% --password %FEED_PASSWORD%` to add the source; omit `--store-password-in-clear-text` to avoid clear-text storage). **Never commit a `nuget.config` containing real credentials** — add it to `.gitignore` if it holds anything other than placeholder env-var references.
 
 ## MCP client configuration
 
@@ -84,8 +34,8 @@ Set `FEED_USERNAME` / `FEED_PASSWORD` as environment variables (or use `dotnet n
 {
   "mcpServers": {
     "infragistics-wpf": {
-      "command": "node",
-      "args": ["C:/path/to/wpf-mcp/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "@infragistics/wpf-mcp-server"]
     }
   }
 }
@@ -97,105 +47,34 @@ Set `FEED_USERNAME` / `FEED_PASSWORD` as environment variables (or use `dotnet n
 {
   "servers": {
     "infragistics-wpf": {
-      "command": "node",
-      "args": ["C:/path/to/wpf-mcp/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "@infragistics/wpf-mcp-server"]
     }
   }
 }
 ```
 
-Add `"--debug"` to `args` for either client to log every tool call/response to `wpf-mcp.log` in your system temp folder (override with the `WPF_MCP_LOG` environment variable) — see [Troubleshooting](#troubleshooting).
+**Claude Code** — from a terminal:
 
-## Data pipeline
-
-```
-NuGet packages (26.1.x)
-  ├── *.dll  →  C# TypeExtractor (reflection)  →  nuget/type-info.json
-  │                                                 (base types, property types, enum values)
-  └── *.xml  ─────────────────────────────────┐
-                                               ↓
-                                         build-api.ts
-                                               ↓
-                                    src/data/api/*.json        (6,907 type files)
-                                    src/data/namespaces.json   (191 Xam* controls)
-                                    src/data/search-index.json (search index)
-
-docs/docs-wpf + docs/docs-common submodules  →  build-docs.ts   →  src/data/docs-index.json + src/data/docs/*.json
-docs/wpf-resources submodule                 →  build-themes.ts →  src/data/theme-index.json + src/data/theme-resources/
+```bash
+claude mcp add infragistics-wpf -- npx -y @infragistics/wpf-mcp-server
 ```
 
-Every step above validates its own output before finishing: a submodule/package that's missing or produces zero usable data aborts the build loudly (with the exact fix command) instead of silently shipping an empty or degraded index.
+Add `"--debug"` to `args` (or after the package name) for any client to log every tool call/response to `wpf-mcp.log` in your system temp folder (override with the `WPF_MCP_LOG` environment variable) — see [Troubleshooting](#troubleshooting).
 
-## npm scripts
-
-| Script | What it does |
-|---|---|
-| `npm run build:all` | Full pipeline: NuGet restore → type extraction → API build → docs build → themes build → TypeScript compile |
-| `npm run generate` | API data only: NuGet restore → type extraction → API build (no TypeScript compile) |
-| `npm run generate:types` | C# reflection extractor only → `nuget/type-info.json` |
-| `npm run docs:restore` | `dotnet restore` the trial NuGet packages referenced in `nuget/WpfDocs.csproj` |
-| `npm run build:docs` | Docs index only, from the `docs-wpf`/`docs-common` submodules (auto-inits them if missing) |
-| `npm run build:themes` | Theme index only, from the `wpf-resources` submodule (auto-inits it if missing) |
-| `npm run ensure-submodules` | Check/auto-init all 3 doc/theme submodules on their own, without building anything |
-| `npm run docs:update` | Pull the latest commit for all 3 doc/theme submodules |
-| `npm run build` | TypeScript compile only (requires `src/data/` to exist) |
-| `npm run inspector` | Launch MCP Inspector for interactive testing |
+To run from a source checkout instead, build it first (see [DEVELOPMENT.md](DEVELOPMENT.md)) and point `command`/`args` at `node` and `path/to/wpf-mcp/dist/index.js`.
 
 ## Troubleshooting
 
-- **A tool returns "no topics found" / "no themes found" for everything.** This used to mean the docs/theme submodules weren't initialized and silently built an empty index. As of the fail-loud guarantee above, a bad build now aborts instead of shipping — so if you're hitting this, the build likely never actually ran, or `dist/` predates this fix. Re-run `npm run build:all` and read the full output; it will either succeed with real counts ("Topics written: 2678", "8 newer themes, 45 legacy style folders", etc.) or abort with a 🚨-banner explaining exactly what's missing.
+- **Which Infragistics version is the data from?** The server prints it to stderr on startup: `Infragistics WPF MCP server 0.1.0 ready (data: Infragistics 26.1.21, built 2026-09-14)`. Every release regenerates the data from the version pinned in [`nuget/WpfDocs.csproj`](nuget/WpfDocs.csproj).
 - **Run the server with `--debug`** (add it to your MCP client config's `args`, see above) to log every tool call's input/output/timing to `wpf-mcp.log` in your system temp folder — useful for reproducing an agent's exact tool-calling sequence after the fact. The exact path is printed to stderr on startup, and can be overridden with the `WPF_MCP_LOG` environment variable.
-- **A tool call succeeded but the answer looks wrong or a control seems missing** — this is usually stale/outdated data from Infragistics' own NuGet package (summaries, base types) rather than a bug in this server. Cross-check against `nuget/WpfDocs.csproj`'s pinned version before assuming the MCP itself is at fault.
+- **A tool call succeeded but the answer looks wrong or a control seems missing** — this is usually stale/outdated data from Infragistics' own NuGet package (summaries, base types) rather than a bug in this server. Cross-check against the pinned version above before assuming the MCP itself is at fault.
+- **A tool returns "no topics found" / "no themes found" for everything** on a source build — the data pipeline didn't complete. Re-run `npm run build:all` and read the output; it either reports real counts or aborts with a 🚨 banner saying exactly what's missing. Published packages are validated against these counts before release, so this can't happen with an npm install.
 
----
+## Contributing
 
-<details>
-<summary><strong>Architecture</strong></summary>
+Build pipeline, data updates, adding tools, versioning and the publish process are documented in [DEVELOPMENT.md](DEVELOPMENT.md).
 
-### Why this approach
+## License
 
-Infragistics WPF NuGet packages ship two files per assembly:
-- `InfragisticsWPF.*.dll` — the actual binary
-- `InfragisticsWPF.*.xml` — compiler-generated XML doc comments (`<summary>`, `<param>`, etc.)
-
-The XML files give you descriptions but nothing else — no property types, no enum values, no inheritance. The only way to get that is reflection on the DLL. That's also what Infragistics' own documentation tool (Innovasys Document! X) does internally before generating their live help site.
-
-### Build pipeline
-
-```
-NuGet packages
-  ├─ *.dll ──► scripts/type-extractor/Program.cs  (C#, reflection)
-  │               Loads all Infragistics DLLs into one AssemblyLoadContext
-  │               Walks every public type: base type, properties with types,
-  │               enum members, nullability
-  │               Output: nuget/type-info.json  (36k entries, compact JSON)
-  │
-  └─ *.xml ──► scripts/build-api.ts  (TypeScript)
-                  Parses XML docs per assembly using split-based chunking
-                  (avoids catastrophic regex backtracking on multi-MB files)
-                  Builds a Map<typeFQN, members> per file (O(n), not O(n²))
-                  Merges with type-info.json to attach typeName/enumValues
-                  Walks __baseType chain with cycle guard for inherited props
-                  Writes async parallel: src/data/api/{TypeName}.json (7k files)
-                  Also writes: src/data/namespaces.json, src/data/search-index.json
-```
-
-### Runtime data layout
-
-| File | Size | Loaded | Purpose |
-|---|---|---|---|
-| `src/data/namespaces.json` | ~50KB | At startup | 191 Xam* control registry |
-| `src/data/search-index.json` | ~5MB | At startup | Compact index: name + summary + member names |
-| `src/data/api/{Type}.json` | ~5–15KB each | On demand | Full member details per type |
-
-The search index is loaded once and kept in memory — search never touches individual type files. `get_wpf_api_reference` loads exactly one file per call.
-
-### Key design decisions
-
-- **No reflection at query time** — all reflection happens at build time. MCP responses are pure JSON file reads.
-- **`type-info.json` is gitignored** — regenerated by `build:all`. Users need .NET 8 SDK for first build.
-- **`src/data/` is gitignored** — regenerated from `type-info.json` + NuGet XMLs by `build-api.ts`.
-- **Inheritance enrichment** — `enrichWithInheritance()` walks `__baseType` chains and copies parent properties to child entries with a `declaredOn` label. This is why `XamDataGrid` shows 74 properties even though it declares very few directly.
-- **`internal` filter** — members with `summary === "internal"` are stripped. These are public DLL members that developers wrote placeholder docs for but aren't part of the public API surface.
-
-</details>
+[MIT](LICENSE)

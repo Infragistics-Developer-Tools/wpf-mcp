@@ -1,6 +1,7 @@
 {
   "name": "@infragistics/wpf-mcp-server",
   "version": "0.0.1-alpha",
+  "mcpName": "io.github.Infragistics-Developer-Tools/wpf-mcp",
   "description": "MCP server for Infragistics NetAdvantage for WPF — component registry and API reference",
   "license": "MIT",
   "author": "Infragistics Developer Tools",
@@ -18,29 +19,44 @@
   ],
   "type": "module",
   "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./package.json": "./package.json"
+  },
   "bin": {
     "wpf-mcp": "./dist/index.js"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "files": [
-    "dist"
+    "dist/**/*.js",
+    "dist/data/**",
+    "README.md"
   ],
   "scripts": {
     "build": "node --eval \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc && node --eval \"require('fs').cpSync('src/data','dist/data',{recursive:true})\"",
-    "prepublishOnly": "npm run build:all",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
+    "test": "npx tsx scripts/smoke-test.ts",
+    "typecheck": "tsc --noEmit && tsc -p scripts",
+    "validate:package": "npx tsx scripts/validate-package.ts",
     "docs:restore": "dotnet restore nuget/WpfDocs.csproj --packages nuget/packages",
     "generate:types": "dotnet run --project scripts/type-extractor/TypeExtractor.csproj -- nuget/packages nuget/type-info.json",
-    "generate": "npm run docs:restore && npm run generate:types && npx tsx scripts/build-api.ts",
+    "generate": "npm run docs:restore && npx tsx scripts/generate.ts",
     "ensure-submodules": "npx tsx scripts/ensure-submodules.ts",
     "build:docs": "npx tsx scripts/build-docs.ts",
     "build:themes": "npx tsx scripts/build-themes.ts",
+    "build:info": "npx tsx scripts/build-info.ts",
     "docs:update": "git submodule update --remote docs/docs-wpf docs/docs-common docs/wpf-resources",
-    "build:all": "npm run generate && npm run build:docs && npm run build:themes && npm run build",
+    "build:data": "npm run generate && npm run build:docs && npm run build:themes && npm run build:info",
+    "build:all": "npm run build:data && npm run build",
+    "version": "npx tsx scripts/version.ts",
+    "release": "npm version --no-git-tag-version",
     "inspector": "npx @modelcontextprotocol/inspector node dist/index.js"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
@@ -48,6 +64,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
+    "conventional-changelog-cli": "^5.0.0",
     "tsx": "^4.21.0",
     "typescript": "^5.5.0"
   }

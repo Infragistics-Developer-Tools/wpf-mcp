@@ -24,6 +24,9 @@ const docIndex: DocIndexEntry[] = existsSync(join(__dirname, 'data/docs-index.js
 const themeIndex: ThemeIndex = existsSync(join(__dirname, 'data/theme-index.json'))
   ? require('./data/theme-index.json')
   : { newerThemes: [], legacyStyles: [] };
+const buildInfo: { infragisticsVersion: string; builtAt: string } | null = existsSync(join(__dirname, 'data/build-info.json'))
+  ? require('./data/build-info.json')
+  : null;
 
 // ── Debug logging ─────────────────────────────────────────────────────────────
 
@@ -162,4 +165,6 @@ server.registerTool(
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-console.error('Infragistics WPF MCP server ready');
+console.error(buildInfo
+  ? `Infragistics WPF MCP server ${version} ready (data: Infragistics ${buildInfo.infragisticsVersion}, built ${buildInfo.builtAt.slice(0, 10)})`
+  : `Infragistics WPF MCP server ${version} ready`);
