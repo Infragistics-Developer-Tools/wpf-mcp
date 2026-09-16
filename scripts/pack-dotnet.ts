@@ -36,7 +36,7 @@ if (!existsSync(join(ROOT, 'src', 'data', 'namespaces.json'))) {
 }
 
 rmSync(OUT_DIR, { recursive: true, force: true });
-execFileSync('dotnet', ['pack', CSPROJ, '-c', 'Release', `-p:Version=${version}`, '-o', OUT_DIR, '-nologo', '-v', 'q'], {
+execFileSync('dotnet', ['pack', CSPROJ, '-c', 'Release', `-p:Version=${version}`, '-p:ContinuousIntegrationBuild=true', '-o', OUT_DIR, '-nologo', '-v', 'q'], {
   cwd: ROOT,
   stdio: 'inherit',
 });

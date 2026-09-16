@@ -3,16 +3,24 @@ on:
   release:
     types: [created]
 
-permissions:
-  id-token: write
-  contents: read
+# Nothing by default; each job asks for exactly what it needs.
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref_name }}
+
+env:
+  VERSION: ${{ github.ref_name }}
 
 jobs:
   # Generates the data set from scratch (nothing under src/data is committed), builds
   # both servers, tests, validates and packs the npm tarball and the NuGet package.
-  # Windows only because of the type extractor.
+  # Windows only because of the type extractor. No publishing rights.
   build:
     runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
     defaults:
       run:
         shell: bash
@@ -20,9 +28,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
+          persist-credentials: false
 
-      - run: echo "VERSION=${GITHUB_REF/refs\/tags\//}" >> $GITHUB_ENV
-      - run: echo ${VERSION}
+      - run: echo "Releasing ${VERSION}"
 
       - uses: ./.github/actions/build-data
         with:
@@ -51,33 +59,24 @@ jobs:
           if-no-files-found: error
           retention-days: 5
 
-  # Publishes exactly the tarball and nupkg that were validated above — this job cannot
-  # rebuild. ubuntu so the npm/OIDC and MCP Registry steps stay identical to igniteui-cli.
-  publish:
+  # Publishes exactly the tarball that was validated above — this job cannot rebuild.
+  # ubuntu so the npm/OIDC steps stay identical to igniteui-cli.
+  publish-npm:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      # Only for server.json, which mcp-publisher reads from the working directory.
-      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: 24
           registry-url: "https://registry.npmjs.org"
 
-      - run: echo "VERSION=${GITHUB_REF/refs\/tags\//}" >> $GITHUB_ENV
-      - run: echo ${VERSION}
-
-      - uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: 8.0.x
-
       - uses: actions/download-artifact@v8
         with:
           name: package
-      - uses: actions/download-artifact@v8
-        with:
-          name: nupkg
-          path: nupkg
 
       - name: Define npm tag
         run: |
@@ -94,25 +93,61 @@ jobs:
       - name: Publish package
         run: npm publish ./*.tgz --tag ${NPM_TAG} --provenance
 
-      # nuget.org trusted publishing (OIDC): no stored API key. NuGet/login exchanges the
-      # workflow's OIDC token for a short-lived key; the trust policy on nuget.org names
-      # this repository + workflow file, and NUGET_USER is the nuget.org account that
-      # owns the policy (a repository variable, not a secret). Prereleases are fine —
-      # nuget.org reads the SemVer prerelease tag, there is no dist-tag to pick.
-      - name: Get nuget.org API key
-        id: nuget-login
-        uses: NuGet/login@v1
+  # Publishes exactly the nupkg that was validated above. Same shape as
+  # IgniteUI/igniteui-blazor's release workflow: gated behind the nuget-org-publish
+  # environment, and nuget.org trusted publishing (OIDC) instead of a stored API key —
+  # NuGet/login exchanges the workflow's OIDC token for a short-lived key under the
+  # nuget.org account named by INFRAGISTICS_NUGET_ORG_USER (the account that owns the
+  # trust policy and the Infragistics.* prefix). No --skip-duplicate: nuget.org never
+  # accepts a version twice, and a rerun should fail loudly rather than pretend it shipped.
+  publish-nuget:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: nuget-org-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-dotnet@v6
         with:
-          user: ${{ vars.NUGET_USER }}
+          dotnet-version: 8.0.x
 
-      - name: Publish NuGet package
-        run: dotnet nuget push nupkg/*.nupkg --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
+      - uses: actions/download-artifact@v8
+        with:
+          name: nupkg
+          path: nupkg
 
-      # mcp-publisher validates every server.json package against its registry; nuget.org
-      # takes a few minutes to index a push, so wait for the package to become resolvable
-      # before publishing to the registry.
+      - name: NuGet login (OIDC Trusted Publishing)
+        id: nuget-login
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1
+        with:
+          user: ${{ secrets.INFRAGISTICS_NUGET_ORG_USER }}
+
+      - name: Publish to NuGet.org
+        env:
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+        run: dotnet nuget push nupkg/*.nupkg --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+
+  # MCP Registry. Skipped for prereleases — the registry has no dist-tag equivalent, so
+  # publishing an alpha/beta/rc would make it the current version. mcp-publisher validates
+  # every server.json package against its registry, so it runs after both pushes and
+  # after nuget.org has indexed the nupkg (which lags a push by minutes).
+  publish-mcp-registry:
+    needs: [publish-npm, publish-nuget]
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Only for server.json, which mcp-publisher reads from the working directory.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
       - name: Wait for nuget.org indexing
-        if: ${{ !github.event.release.prerelease }}
         run: |
           ID=$(node -p "require('./server.json').packages.find(p => p.registryType === 'nuget').identifier.toLowerCase()")
           URL="https://api.nuget.org/v3-flatcontainer/${ID}/${VERSION,,}/${ID}.nuspec"
@@ -122,15 +157,12 @@ jobs:
           done
           echo "::error::nuget.org did not index ${ID} ${VERSION} within 20 minutes"; exit 1
 
-      # MCP publishing. Skipped for prereleases — the MCP registry has no dist-tag
-      # equivalent, so publishing an alpha/beta/rc would make it the current version.
       - name: Download MCP Publisher
-        if: ${{ !github.event.release.prerelease }}
         run: |
           curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar -xz -f - mcp-publisher
           chmod +x mcp-publisher
+
       - name: Publish to MCP Registry
-        if: ${{ !github.event.release.prerelease }}
         run: |
           ./mcp-publisher login github-oidc
           ./mcp-publisher publish

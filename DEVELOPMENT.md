@@ -178,7 +178,7 @@ Prereleases publish under the npm `next` dist-tag and as a normal SemVer prerele
 | Workflow | Trigger | Runner | Does |
 |---|---|---|---|
 | `nodejs.yml` — *Node.js CI* | push / PR to `main` | `typecheck`: ubuntu · `build-and-test`: windows, Node 22 + 24 | `npm ci` → `typecheck` → `build:all` → `test` → `build:dotnet` → `test:dotnet` → `test:parity` → `pack:dotnet` → `validate:package` → prints package sizes |
-| `npm-publish.yml` — *Publish (npm + NuGet + MCP Registry)* | GitHub Release created | `build`: windows · `publish`: ubuntu | `build`: same as CI (nupkg stamped with the tag) + `validate:package --expected-version <tag>` + `npm pack` → two artifacts. `publish`: `npm publish <tgz> --tag latest|next --provenance` via OIDC, `dotnet nuget push` via nuget.org trusted publishing, then (non-prerelease only) wait for nuget.org to index and `mcp-publisher publish` |
+| `npm-publish.yml` — *Publish (npm + NuGet + MCP Registry)* | GitHub Release created | `build`: windows · three publish jobs: ubuntu | `build`: same as CI (nupkg stamped with the tag) + `validate:package --expected-version <tag>` + `npm pack` → two artifacts. `publish-npm`: `npm publish <tgz> --tag latest|next --provenance` via OIDC. `publish-nuget` (environment `nuget-org-publish`): `NuGet/login` + `dotnet nuget push`. `publish-mcp-registry` (non-prerelease only, after both): wait for nuget.org to index, `mcp-publisher publish` |
 | `bump-infragistics.yml` — *Bump Infragistics data sources* | manual | ubuntu | Rewrites csproj versions and/or `docs:update`, opens a PR |
 
 Both Windows jobs go through the composite action `.github/actions/build-data`, so CI and publish can't drift. It takes the private-feed credentials as inputs, which the workflows pass from these repository secrets (*Settings → Secrets and variables → Actions*):
@@ -189,7 +189,7 @@ Both Windows jobs go through the composite action `.github/actions/build-data`, 
 | `NUGET_FEED_USERNAME` | feed username |
 | `NUGET_FEED_PASSWORD` | feed password / API key |
 
-The action writes `nuget/nuget.config` from them (credentials as `%ENV%` placeholders, `Infragistics.*` mapped to the private feed, everything else to nuget.org) before restoring. Without the secrets it restores from nuget.org. No npm or nuget.org token exists: both registries use OIDC trusted publishing. The publish job additionally reads the repository **variable** `NUGET_USER` — the nuget.org account that owns the trust policy, passed to `NuGet/login`.
+The action writes `nuget/nuget.config` from them (credentials as `%ENV%` placeholders, `Infragistics.*` mapped to the private feed, everything else to nuget.org) before restoring. Without the secrets it restores from nuget.org. No npm or nuget.org token exists: both registries use OIDC trusted publishing. `publish-nuget` additionally reads the secret `INFRAGISTICS_NUGET_ORG_USER` — the nuget.org account that owns the trust policy, passed to `NuGet/login` — and runs in the `nuget-org-publish` environment, both named the same way as in [IgniteUI/igniteui-blazor's release workflow](https://github.com/IgniteUI/igniteui-blazor/blob/master/.github/workflows/igniteui-blazor-lite-release.yml) so the nuget.org side can be configured identically.
 
 It restores two caches:
 
@@ -223,15 +223,20 @@ The same four commands are the fallback if Actions is unavailable; append `--tag
 
 ### NuGet
 
-Same shape as npm: the first version is pushed by hand, then a trust policy takes over.
+Unlike npm, a nuget.org trusted-publishing policy belongs to an **account**, not to a package, so the workflow can push the very first version — no manual push is needed. The setup mirrors [IgniteUI/igniteui-blazor](https://github.com/IgniteUI/igniteui-blazor/blob/master/.github/workflows/igniteui-blazor-lite-release.yml), which already publishes `IgniteUI.Blazor.Lite` this way from the Infragistics nuget.org account:
 
-1. **Package ID prefix.** `Infragistics.*` is a [reserved prefix](https://learn.microsoft.com/nuget/nuget-org/id-prefix-reservation) on nuget.org owned by the Infragistics account. `Infragistics.Wpf.Mcp` can only be pushed by that account or a co-owner it adds — sort this out before the first push, or the push is rejected. (Changing `<PackageId>` in `server/Infragistics.Wpf.Mcp.csproj` and the `identifier` in `server.json` is the fallback.)
-2. First push, from the machine that ran the build:
-   ```bash
-   npm run pack:dotnet -- --version 0.1.0 && npm run validate:package -- --expected-version 0.1.0
-   dotnet nuget push nupkg/*.nupkg --api-key <key from nuget.org> --source https://api.nuget.org/v3/index.json
-   ```
-3. On nuget.org → account → *Trusted Publishing* → add a policy: repository owner `Infragistics-Developer-Tools`, repository `wpf-mcp`, workflow file `npm-publish.yml`. Set the repository variable `NUGET_USER` to the nuget.org username that owns the policy. From then on `NuGet/login` mints a short-lived key per run.
+1. **Package ID prefix.** `Infragistics.*` is a [reserved prefix](https://learn.microsoft.com/nuget/nuget-org/id-prefix-reservation) owned by the Infragistics nuget.org account, so the trust policy must be created on that account (or on a co-owner of the prefix). The fallback is an unreserved ID: change `<PackageId>` in `server/Infragistics.Wpf.Mcp.csproj` and the nuget `identifier` in `server.json` (`validate:package` checks they agree).
+2. **nuget.org** → that account → *Trusted Publishing* → add a policy: repository owner `Infragistics-Developer-Tools`, repository `wpf-mcp`, workflow file `npm-publish.yml`, environment `nuget-org-publish`.
+3. **GitHub** → *Settings → Environments* → create `nuget-org-publish` (optionally with required reviewers — that makes every NuGet publish an approval step). *Settings → Secrets and variables → Actions* → secret `INFRAGISTICS_NUGET_ORG_USER` = the nuget.org username the policy was created under (an organization secret with that name already exists for IgniteUI repositories; this repository lives in another organization, so it has to be added here).
+
+From then on `NuGet/login` mints a short-lived key per run. If Actions is unavailable, the manual path is:
+
+```bash
+npm run pack:dotnet -- --version 0.1.0 && npm run validate:package -- --expected-version 0.1.0
+dotnet nuget push nupkg/*.nupkg --api-key <scoped key from nuget.org> --source https://api.nuget.org/v3/index.json
+```
+
+A version can never be pushed twice, so a rerun of the workflow for a tag that already published fails at `publish-nuget` (and at `publish-npm`) — that is intended.
 
 The MCP Registry verifies NuGet ownership the same way it does npm: the nupkg must contain `.mcp/server.json` whose `name` matches the registry name. `pack:dotnet` copies the repository `server.json` there, and `validate:package` checks that the copy is current.
 
