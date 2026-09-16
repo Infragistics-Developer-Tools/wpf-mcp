@@ -1,4 +1,4 @@
-name: Npm.js publish
+name: Publish (npm + NuGet + MCP Registry)
 on:
   release:
     types: [created]
@@ -8,8 +8,9 @@ permissions:
   contents: read
 
 jobs:
-  # Generates the data set from scratch (nothing under src/data is committed),
-  # builds, tests, validates and packs. Windows only because of the type extractor.
+  # Generates the data set from scratch (nothing under src/data is committed), builds
+  # both servers, tests, validates and packs the npm tarball and the NuGet package.
+  # Windows only because of the type extractor.
   build:
     runs-on: windows-latest
     defaults:
@@ -28,6 +29,7 @@ jobs:
           nuget-feed-url: ${{ secrets.NUGET_FEED_URL }}
           nuget-feed-username: ${{ secrets.NUGET_FEED_USERNAME }}
           nuget-feed-password: ${{ secrets.NUGET_FEED_PASSWORD }}
+          package-version: ${{ env.VERSION }}
 
       - name: Validate package contents
         run: npm run validate:package -- --expected-version "$VERSION"
@@ -42,8 +44,15 @@ jobs:
           if-no-files-found: error
           retention-days: 5
 
-  # Publishes exactly the tarball that was validated above — this job cannot rebuild.
-  # ubuntu so the npm/OIDC and MCP Registry steps stay identical to igniteui-cli.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nupkg
+          path: "nupkg/*.nupkg"
+          if-no-files-found: error
+          retention-days: 5
+
+  # Publishes exactly the tarball and nupkg that were validated above — this job cannot
+  # rebuild. ubuntu so the npm/OIDC and MCP Registry steps stay identical to igniteui-cli.
   publish:
     needs: build
     runs-on: ubuntu-latest
@@ -58,9 +67,17 @@ jobs:
       - run: echo "VERSION=${GITHUB_REF/refs\/tags\//}" >> $GITHUB_ENV
       - run: echo ${VERSION}
 
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 8.0.x
+
       - uses: actions/download-artifact@v8
         with:
           name: package
+      - uses: actions/download-artifact@v8
+        with:
+          name: nupkg
+          path: nupkg
 
       - name: Define npm tag
         run: |
@@ -76,6 +93,34 @@ jobs:
       # npmjs.com with this repository and workflow file as its trusted publisher.
       - name: Publish package
         run: npm publish ./*.tgz --tag ${NPM_TAG} --provenance
+
+      # nuget.org trusted publishing (OIDC): no stored API key. NuGet/login exchanges the
+      # workflow's OIDC token for a short-lived key; the trust policy on nuget.org names
+      # this repository + workflow file, and NUGET_USER is the nuget.org account that
+      # owns the policy (a repository variable, not a secret). Prereleases are fine —
+      # nuget.org reads the SemVer prerelease tag, there is no dist-tag to pick.
+      - name: Get nuget.org API key
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ vars.NUGET_USER }}
+
+      - name: Publish NuGet package
+        run: dotnet nuget push nupkg/*.nupkg --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+      # mcp-publisher validates every server.json package against its registry; nuget.org
+      # takes a few minutes to index a push, so wait for the package to become resolvable
+      # before publishing to the registry.
+      - name: Wait for nuget.org indexing
+        if: ${{ !github.event.release.prerelease }}
+        run: |
+          ID=$(node -p "require('./server.json').packages.find(p => p.registryType === 'nuget').identifier.toLowerCase()")
+          URL="https://api.nuget.org/v3-flatcontainer/${ID}/${VERSION,,}/${ID}.nuspec"
+          for i in $(seq 1 60); do
+            if curl -fsSL -o /dev/null "$URL"; then echo "indexed: $URL"; exit 0; fi
+            echo "not indexed yet ($i/60), waiting 20s…"; sleep 20
+          done
+          echo "::error::nuget.org did not index ${ID} ${VERSION} within 20 minutes"; exit 1
 
       # MCP publishing. Skipped for prereleases — the MCP registry has no dist-tag
       # equivalent, so publishing an alpha/beta/rc would make it the current version.

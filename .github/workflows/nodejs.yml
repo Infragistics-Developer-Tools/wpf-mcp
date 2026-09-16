@@ -22,9 +22,9 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
 
-  # The real thing: full data generation + build + smoke test + package validation.
-  # windows-latest because scripts/type-extractor targets net8.0-windows and loads
-  # WPF assemblies; nothing else in the pipeline needs Windows.
+  # The real thing: full data generation + both servers + smoke/parity tests + package
+  # validation. windows-latest because scripts/type-extractor targets net8.0-windows
+  # and loads WPF assemblies; nothing else in the pipeline needs Windows.
   build-and-test:
     runs-on: windows-latest
     strategy:
@@ -43,6 +43,8 @@ jobs:
       - name: Validate package contents
         shell: bash
         run: npm run validate:package
-      - name: Report package size
+      - name: Report package sizes
         shell: bash
-        run: npm pack --dry-run 2>&1 | grep -E "package size|unpacked size|total files"
+        run: |
+          npm pack --dry-run 2>&1 | grep -E "package size|unpacked size|total files"
+          ls -l nupkg/*.nupkg

@@ -2,25 +2,31 @@
 /**
  * validate-package.ts
  *
- * Pre-publish gate: proves that dist/ contains a complete, non-degraded data set and
- * that the version about to be published is consistent everywhere.
+ * Pre-publish gate: proves that dist/ contains a complete, non-degraded data set, that
+ * the NuGet package in nupkg/ (if built — npm run pack:dotnet) carries the same data and
+ * metadata, and that the version about to be published is consistent everywhere.
  *
  *   npx tsx scripts/validate-package.ts [--expected-version 1.2.3]
  *
- * --expected-version (or EXPECTED_VERSION) is the release tag; when given, package.json
- * and server.json must all agree with it. Thresholds are deliberately below the real
- * counts (see README) so a version bump never trips them, but a partial build does.
+ * --expected-version (or EXPECTED_VERSION) is the release tag; when given, package.json,
+ * server.json and the .nupkg must all agree with it, and the .nupkg must exist. Thresholds
+ * are deliberately below the real counts (see README) so a version bump never trips them,
+ * but a partial build does.
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { readInfragisticsVersion } from './build-info.js';
+import { ZipIndex } from './lib-zip.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT     = join(__dirname, '..');
 const DIST     = join(ROOT, 'dist');
 const DATA     = join(DIST, 'data');
+const NUPKG    = join(ROOT, 'nupkg');
+const CSPROJ   = join(ROOT, 'server', 'Infragistics.Wpf.Mcp.csproj');
+const TOOL_DIR = 'tools/net8.0/any/';
 
 const MIN_COMPONENTS      = 150;
 const MIN_SEARCH_ENTRIES  = 5000;
@@ -78,6 +84,10 @@ function countFiles(dir: string, ext: string): number {
 
 const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8'));
 const expectedVersion = getExpectedVersion();
+const nugetId = /<PackageId>(.*?)<\/PackageId>/.exec(readFileSync(CSPROJ, 'utf-8'))?.[1] ?? '';
+if (!nugetId) errors.push(`no <PackageId> in ${CSPROJ}`);
+// What each server.json package entry must be named, by registry.
+const REGISTRY_IDENTIFIERS: Record<string, string> = { npm: pkg.name, nuget: nugetId };
 if (expectedVersion) {
   if (pkg.version !== expectedVersion) {
     errors.push(`package.json version mismatch: got ${pkg.version}, expected ${expectedVersion}`);
@@ -95,8 +105,11 @@ if (expectedVersion) {
     } else {
       ok('ver', serverJson.version, 'server.json');
     }
-    const pkgs: Array<{ identifier?: string; version?: string }> = serverJson.packages ?? [];
+    const pkgs: Array<{ registryType?: string; identifier?: string; version?: string }> = serverJson.packages ?? [];
     if (pkgs.length === 0) errors.push('server.json has no entries in "packages"');
+    for (const registry of Object.keys(REGISTRY_IDENTIFIERS)) {
+      if (!pkgs.some(p => p.registryType === registry)) errors.push(`server.json has no "${registry}" entry in "packages"`);
+    }
     pkgs.forEach((p, i) => {
       const label = p.identifier ?? `packages[${i}]`;
       if (p.version !== expectedVersion) {
@@ -104,8 +117,11 @@ if (expectedVersion) {
       } else {
         ok('ver', p.version ?? '', `server.json ${label}`);
       }
-      if (p.identifier !== pkg.name) {
-        errors.push(`server.json ${label} does not match package.json name ${pkg.name}`);
+      const wanted = REGISTRY_IDENTIFIERS[p.registryType ?? ''];
+      if (wanted === undefined) {
+        errors.push(`server.json ${label} has unknown registryType "${p.registryType}"`);
+      } else if (p.identifier !== wanted) {
+        errors.push(`server.json ${label} (${p.registryType}) should be "${wanted}"`);
       }
     });
   }
@@ -194,6 +210,59 @@ if (info) {
     errors.push(`build-info.json was built for package ${info.packageVersion} but package.json is ${pkg.version} — rerun npm run build:info && npm run build`);
   } else {
     ok('info', info.infragisticsVersion, `Infragistics version (built ${info.builtAt})`);
+  }
+}
+
+// ── NuGet package (nupkg/) ────────────────────────────────────────────────────
+
+const nupkgFiles = existsSync(NUPKG) ? readdirSync(NUPKG).filter(f => f.endsWith('.nupkg')) : [];
+if (nupkgFiles.length === 0) {
+  if (expectedVersion) errors.push('nupkg/ has no .nupkg — run npm run pack:dotnet before validating a release');
+  else console.log('--  nupkg  (not built — npm run pack:dotnet to validate the NuGet package too)');
+} else if (nupkgFiles.length > 1) {
+  errors.push(`nupkg/ has ${nupkgFiles.length} .nupkg files, expected exactly one: ${nupkgFiles.join(', ')}`);
+} else {
+  const version = expectedVersion ?? pkg.version;
+  const file = nupkgFiles[0];
+  const wantedFile = `${nugetId}.${version}.nupkg`;
+  if (file !== wantedFile) errors.push(`nupkg/${file} should be ${wantedFile} — rerun npm run pack:dotnet after a version bump`);
+
+  const zip = new ZipIndex(readFileSync(join(NUPKG, file)));
+  const names = zip.list().map(e => e.name);
+
+  const nuspec = zip.readText(`${nugetId}.nuspec`) ?? '';
+  const nuspecVersion = /<version>(.*?)<\/version>/.exec(nuspec)?.[1];
+  if (nuspecVersion !== version) errors.push(`nuspec version is ${nuspecVersion}, expected ${version}`);
+  for (const type of ['DotnetTool', 'McpServer']) {
+    if (!nuspec.includes(`<packageType name="${type}" />`)) errors.push(`nuspec lacks packageType "${type}"`);
+  }
+
+  const packagedServerJson = zip.readText('.mcp/server.json');
+  if (!packagedServerJson) {
+    errors.push('nupkg lacks .mcp/server.json — the MCP Registry cannot verify NuGet ownership without it');
+  } else if (packagedServerJson !== readFileSync(join(ROOT, 'server.json'), 'utf-8').replace(/^\uFEFF/, '')) {
+    errors.push('nupkg .mcp/server.json differs from the repository server.json — rerun npm run pack:dotnet');
+  }
+
+  for (const required of [`${TOOL_DIR}wpf-mcp.dll`, `${TOOL_DIR}DotnetToolSettings.xml`, 'README.md']) {
+    if (!zip.has(required)) errors.push(`nupkg lacks ${required}`);
+  }
+  const stray = names.filter(n => n.startsWith('content/') || n.startsWith('contentFiles/'));
+  if (stray.length > 0) errors.push(`nupkg packs data as NuGet content (${stray.length} entries under content/ or contentFiles/) — the csproj Content item needs Pack="false"`);
+
+  const dataPrefix = `${TOOL_DIR}data/`;
+  const count = (sub: string, ext: string) => names.filter(n => n.startsWith(dataPrefix + sub) && n.endsWith(ext)).length;
+  for (const index of ['namespaces.json', 'search-index.json', 'docs-index.json', 'theme-index.json', 'build-info.json']) {
+    if (!zip.has(dataPrefix + index)) errors.push(`nupkg lacks data/${index}`);
+  }
+  const nupkgApi = count('api/', '.json'), nupkgDocs = count('docs/', '.json'), nupkgXaml = count('theme-resources/', '.xaml');
+  if (nupkgApi < MIN_API_FILES) errors.push(`nupkg has ${nupkgApi} api type files < ${MIN_API_FILES}`);
+  if (nupkgDocs < MIN_DOC_TOPICS) errors.push(`nupkg has ${nupkgDocs} doc topics < ${MIN_DOC_TOPICS}`);
+  if (nupkgXaml < MIN_THEME_XAML) errors.push(`nupkg has ${nupkgXaml} theme xaml files < ${MIN_THEME_XAML}`);
+  if (nupkgApi !== apiFiles) errors.push(`nupkg has ${nupkgApi} api type files but dist/data has ${apiFiles} — nupkg is stale, rerun npm run pack:dotnet`);
+
+  if (!errors.some(e => e.includes('nupkg') || e.includes('nuspec'))) {
+    ok('nupkg', formatSize(statSync(join(NUPKG, file)).size), `${file} (${nupkgApi} api / ${nupkgDocs} docs / ${nupkgXaml} xaml, ${names.length} files)`);
   }
 }
 

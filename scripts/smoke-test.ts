@@ -7,7 +7,8 @@
  * gate for CI and publishing: a build whose data is present but wrong (empty index,
  * missing inheritance, broken path guard) passes validate-package's counts but not this.
  *
- * Prerequisite: npm run build (dist/ must exist).
+ * Prerequisite: npm run build (dist/ must exist). Pass --dotnet (npm run test:dotnet) to run the
+ * same checks against the C# server (dotnet build server/ first; WPF_MCP_DOTNET_DLL overrides the path).
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -19,6 +20,10 @@ import { fileURLToPath } from 'url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT  = join(__dirname, '..');
 const ENTRY = join(ROOT, 'dist', 'index.js');
+const DOTNET_DLL = process.env.WPF_MCP_DOTNET_DLL ?? join(ROOT, 'server', 'bin', 'Debug', 'net8.0', 'wpf-mcp.dll');
+const TARGET = process.argv.includes('--dotnet')
+  ? { entry: DOTNET_DLL, command: 'dotnet', args: [DOTNET_DLL], hint: 'dotnet build server/' }
+  : { entry: ENTRY, command: process.execPath, args: [ENTRY], hint: 'npm run build' };
 
 const EXPECTED_TOOLS = [
   'list_wpf_components',
@@ -51,13 +56,13 @@ function textOf(r: ToolResult): string {
 }
 
 async function main(): Promise<void> {
-  if (!existsSync(ENTRY)) {
-    console.error(`dist/index.js not found — run npm run build first.`);
+  if (!existsSync(TARGET.entry)) {
+    console.error(`${TARGET.entry} not found — run ${TARGET.hint} first.`);
     process.exit(1);
   }
 
   const client = new Client({ name: 'wpf-mcp-smoke-test', version: '0.0.0' });
-  const transport = new StdioClientTransport({ command: process.execPath, args: [ENTRY], stderr: 'pipe' });
+  const transport = new StdioClientTransport({ command: TARGET.command, args: TARGET.args, stderr: 'pipe' });
   const stderr: string[] = [];
   transport.stderr?.on('data', (d: Buffer) => stderr.push(d.toString()));
 

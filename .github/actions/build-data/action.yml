@@ -1,9 +1,11 @@
 name: Build data and package
 description: >
   Restores the Infragistics NuGet packages, runs the full data pipeline
-  (type extractor → API → docs → themes), compiles the server and runs the
-  smoke test. Windows only — the type extractor loads WPF assemblies.
-  Shared by nodejs.yml and npm-publish.yml so the two can never drift.
+  (type extractor → API → docs → themes), compiles both servers (Node and
+  C#), runs the smoke test against each and the cross-runtime parity test,
+  then packs the NuGet package into nupkg/. Windows only — the type extractor
+  loads WPF assemblies. Shared by nodejs.yml and npm-publish.yml so the two
+  can never drift.
 
 inputs:
   node-version:
@@ -17,6 +19,9 @@ inputs:
     default: ""
   nuget-feed-password:
     description: Password / API key for the private feed
+    default: ""
+  package-version:
+    description: Version stamped into the NuGet package (the release tag). Defaults to package.json's.
     default: ""
 
 runs:
@@ -102,3 +107,21 @@ runs:
     - name: Smoke test
       shell: bash
       run: npm test
+
+    # The C# server reads the same src/data; the parity test proves both runtimes
+    # return byte-identical tool output so either package can be installed.
+    - name: Build C# server
+      shell: bash
+      run: npm run build:dotnet
+
+    - name: Smoke test (C#)
+      shell: bash
+      run: npm run test:dotnet
+
+    - name: Parity test (Node vs C#)
+      shell: bash
+      run: npm run test:parity
+
+    - name: Pack NuGet package
+      shell: bash
+      run: npm run pack:dotnet -- --version "${{ inputs.package-version }}"
