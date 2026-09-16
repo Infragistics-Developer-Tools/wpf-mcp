@@ -69,7 +69,7 @@ dnx Infragistics.Wpf.Mcp --yes                   # no install, like npx
 claude mcp add infragistics-wpf -- npx -y @infragistics/wpf-mcp-server
 ```
 
-**Using the NuGet package instead** — in any of the above, replace `"command": "npx", "args": ["-y", "@infragistics/wpf-mcp-server"]` with `"command": "wpf-mcp"` (after `dotnet tool install -g`) or `"command": "dnx", "args": ["Infragistics.Wpf.Mcp", "--yes"]`. Visual Studio and VS Code also offer a one-click install from the package's nuget.org page.
+**Using the NuGet package instead** — in any of the above, replace `"command": "npx", "args": ["-y", "@infragistics/wpf-mcp-server"]` with `"command": "wpf-mcp"` (after `dotnet tool install -g`) or `"command": "dnx", "args": ["Infragistics.Wpf.Mcp", "--yes"]`; for Claude Code that is `claude mcp add infragistics-wpf -- wpf-mcp`. The package's nuget.org page also shows a ready-made config snippet for VS Code and Visual Studio.
 
 Add `"--debug"` to `args` (or after the package name) for any client to log every tool call/response to `wpf-mcp.log` in your system temp folder (override with the `WPF_MCP_LOG` environment variable) — see [Troubleshooting](#troubleshooting).
 

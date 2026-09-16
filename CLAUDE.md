@@ -18,7 +18,7 @@ npm run build:dotnet     # dotnet build server/ (needs src/data/); npm run test:
 npm run test:parity      # 60+ fixed calls against both servers, fails on any output difference
 npm run pack:dotnet      # dotnet pack → nupkg/ (version from package.json; -- --version X.Y.Z overrides)
 npm run typecheck        # tsc --noEmit for src/ and scripts/ — needs no data
-npm run validate:package # pre-publish gate: data thresholds + version consistency (-- --expected-version X.Y.Z)
+npm run validate:package # pre-publish gate: data thresholds, nupkg contents (when nupkg/ exists), version consistency (-- --expected-version X.Y.Z)
 npm run inspector        # MCP Inspector against dist/index.js
 node dist/index.js --debug   # logs every tool call to $TMP/wpf-mcp.log (override: WPF_MCP_LOG)
 ```
@@ -66,7 +66,8 @@ Release/publish process (`npm run release -- <bump>` → PR → GitHub Release w
 
 - `Program.cs` — same bootstrap as `src/index.ts` on the official `ModelContextProtocol` SDK: stderr-only logging, `--debug` file log, `ServerInstructions.cs` (verbatim copy of the instructions), `.WithTools<T>()` per tool class.
 - `Data/Models.cs` (records + `WpfJsonContext` source-gen), `Data/DataStore.cs` (startup indexes, on-demand loaders, `ResolveInside` containment check), `Data/NameComparer.cs` (deterministic stand-in for JS `localeCompare`).
-- `Tools/ComponentTools.cs`, `SearchTools.cs`, `DocsTools.cs`, `ThemeTools.cs` — one `[McpServerTool]` method per tool, `[Description]` = zod `.describe()`, DataAnnotations = zod constraints (schema-only; clamp in code). `Tools/ToolDescriptions.cs` mirrors `constants.ts`.
+- `Tools/ComponentTools.cs`, `SearchTools.cs`, `DocsTools.cs`, `ThemeTools.cs` — one `[McpServerTool]` method per tool, `[Description]` = zod `.describe()`, DataAnnotations = zod constraints (schema-only; clamp in code). `Tools/ToolDescriptions.cs` mirrors `constants.ts`, `Tools/Enums.cs` the `z.enum()` lists, `Tools/ToolLog.cs` the `--debug` logger.
+- `Infragistics.Wpf.Mcp.csproj` — `PackAsTool` + `PackageType McpServer`; `src/data/**` is a `Content` item with `Pack="false"` (it ships inside the tool folder, not as NuGet content), root `server.json` is packed as `.mcp/server.json`.
 - Quirks are mirrored on purpose (JS `""` falsiness for optional strings) — see comments at each site. Change TS and C# together, then run `test:parity`.
 
 ### Conventions worth knowing
@@ -74,5 +75,5 @@ Release/publish process (`npm run release -- <bump>` → PR → GitHub Release w
 - ESM with `module: Node16` — relative imports must use `.js` extensions even for `.ts` sources.
 - `ApiEntry`, `DocIndexEntry`/`DocEntry`, and `ThemeIndex` shapes exist three times: `scripts/*.ts` (producer), `src/lib/types.ts` (Node consumer) and `server/Data/Models.cs` (C# consumer; scripts intentionally don't import from `src/`). Change all three when changing the data shape.
 - Adding a tool touches four TS files: `constants.ts` (description), `schemas.ts` (input), `handlers.ts` (factory), `index.ts` (registration + any new startup data) — plus its C# mirror in `server/Tools/`, a case in `scripts/smoke-test.ts` and calls in `scripts/parity-test.ts`.
-- `nuget/type-info.json`, `nuget/packages/`, `src/data/`, `dist/`, `server/bin|obj/` and `nupkg/` are all gitignored build outputs — never commit them. The publish workflow regenerates them; what pins a release's content is `nuget/WpfDocs.csproj` + the submodule commits.
+- `nuget/type-info.json`, `nuget/packages/`, `nuget/bin|obj/`, `src/data/`, `dist/`, `server/bin|obj/` and `nupkg/` are all gitignored build outputs — never commit them. The publish workflow regenerates them; what pins a release's content is `nuget/WpfDocs.csproj` + the submodule commits.
 - `package.json` version and `server.json` version(s) must match — `scripts/version.ts` keeps them in sync; don't edit either by hand. The csproj has no real version (`0.0.0-dev`); `pack:dotnet`/CI inject it.

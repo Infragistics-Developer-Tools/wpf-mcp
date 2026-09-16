@@ -30,6 +30,8 @@ npm run build:all
 | Build info | `build:info` | csproj + submodule SHAs | `src/data/build-info.json` |
 | Compile | `build` | `src/` | `dist/` (with `src/data` copied to `dist/data`) |
 
+The C# server is not part of `build:all`; once `src/data/` exists, `npm run build:dotnet` compiles it into `server/bin/Debug/net8.0/` with the data copied alongside.
+
 First run takes 2–5 minutes, almost all of it the NuGet restore and the type extractor. Later runs are ~10 s: the restore is a no-op when `nuget/packages/` is populated, and `scripts/generate.ts` skips the extractor while `nuget/type-info.json` is newer than `nuget/WpfDocs.csproj` and everything in `scripts/type-extractor/` (`npx tsx scripts/generate.ts --force` to override).
 
 A healthy build ends with these counts (they drift slightly between Infragistics versions):
@@ -44,7 +46,7 @@ Build info → src/data/build-info.json
 
 Every step validates its own output and aborts with a 🚨 banner (see `scripts/build-guard.ts`) if a submodule, package or index would come out empty. There is no "warning, continuing" mode — a degraded data set must never reach `dist/`.
 
-**None of the generated data is committed.** `nuget/packages/`, `nuget/type-info.json`, `src/data/` and `dist/` are all gitignored; the published package is regenerated from scratch by the publish workflow. What *is* committed — and therefore pins the content of a release — is the Infragistics version in `nuget/WpfDocs.csproj` and the three submodule commits.
+**None of the generated data is committed.** `nuget/packages/`, `nuget/type-info.json`, `src/data/`, `dist/`, `server/bin|obj/` and `nupkg/` are all gitignored; the published package is regenerated from scratch by the publish workflow. What *is* committed — and therefore pins the content of a release — is the Infragistics version in `nuget/WpfDocs.csproj` and the three submodule commits.
 
 ### Submodules
 
@@ -99,16 +101,16 @@ Then set `NUGET_FEED_USERNAME` / `NUGET_FEED_PASSWORD` in your environment and r
 | `npm run typecheck` | `tsc --noEmit` for `src/` and `scripts/` — the only check that needs no data |
 | `npm run validate:package` | Pre-publish gate: data-set thresholds, `dist/index.js` shebang, build-info ↔ csproj consistency, and — when `nupkg/` exists — the NuGet package's metadata, `.mcp/server.json` and data counts; `-- --expected-version X.Y.Z` also checks `package.json`, `server.json` and the nupkg version, and requires the nupkg |
 | `npm run inspector` | MCP Inspector against `dist/index.js` |
-| `node dist/index.js --debug` | Log every tool call to `wpf-mcp.log` in the system temp folder (`WPF_MCP_LOG` overrides the path) |
+| `node dist/index.js --debug` | Log every tool call to `wpf-mcp.log` in the system temp folder (`WPF_MCP_LOG` overrides the path); `dotnet server/bin/Debug/net8.0/wpf-mcp.dll --debug` does the same for the C# server |
 | `npm run generate` / `build:docs` / `build:themes` / `build:info` | The individual `build:data` steps |
 | `npm run generate:types` | The C# extractor alone |
 | `npm run ensure-submodules` | Check/init the three submodules |
 | `npm run docs:update` | Move the three submodules to their latest upstream commit |
-| `npm pack --dry-run` | Show exactly what would be published and how big it is (~12 MB tarball, ~100 MB unpacked, ~10k files) |
+| `npm pack --dry-run` | Show exactly what would be published to npm and how big it is (~12 MB tarball, ~100 MB unpacked, ~10k files); the nupkg from `pack:dotnet` is ~19 MB |
 
 Before opening a PR: `npm run typecheck && npm run build:all && npm test && npm run build:dotnet && npm run test:dotnet && npm run test:parity && npm run pack:dotnet && npm run validate:package`. CI runs the same.
 
-The C# server is a second runtime over the same `src/data/`, not a second product: `server/Program.cs` (bootstrap), `server/Data/` (models + loaders), `server/Tools/*.cs` (one class per tool group). Locally it builds as version `0.0.0-dev`; `pack:dotnet` and CI stamp the real version with `-p:Version`. The csproj carries no version of its own.
+The C# server is a second runtime over the same `src/data/`, not a second product: `server/Program.cs` (bootstrap), `server/Data/` (models + loaders), `server/Tools/*.cs` (one class per tool group). Locally it builds as version `0.0.0-dev` (the placeholder in the csproj); `pack:dotnet` and CI override it with `-p:Version` from `package.json` or the release tag.
 
 ## Updating Infragistics data
 
@@ -122,7 +124,7 @@ To bump, either run the **Bump Infragistics data sources** workflow (Actions →
 ```bash
 sed -i -E 's/(<PackageReference [^>]*Version=")[^"]+(")/\126.1.30\2/' nuget/WpfDocs.csproj
 npm run docs:update
-npm run build:all && npm test && npm run validate:package
+npm run build:all && npm test && npm run build:dotnet && npm run test:parity && npm run validate:package
 git add nuget/WpfDocs.csproj docs/
 git commit -m "chore(data): bump Infragistics sources (26.1.30)"
 ```
@@ -196,7 +198,7 @@ It restores two caches:
 | `nuget/packages` | `nuget-<os>-<hash of WpfDocs.csproj>` | NuGet version bump |
 | `nuget/type-info.json` | `type-info-<os>-<hash of WpfDocs.csproj + scripts/type-extractor/**>` | NuGet version bump or extractor change |
 
-With both hot, a full CI job is ~2 min; cold (first run after a bump) 5–8 min.
+With both hot, a full CI job is ~3 min (the C# build, tests and pack add about a minute); cold (first run after a bump) 5–8 min.
 
 **Where to look when publish fails:** the `build` job's *Validate package contents* step prints one `OK`/error line per check — a version mismatch means the release tag doesn't match `package.json`/`server.json` (redo the bump), a threshold failure means the data pipeline produced less than expected (read the *Build data and server* step for the 🚨 banner), a `nupkg` error names what is wrong with the NuGet package. A *Parity test* failure prints the first differing line per call — the C# port has drifted from the TypeScript (or vice versa). The `publish` job failing at `npm publish` / `Get nuget.org API key` with an auth error means the trusted publisher isn't configured for this workflow on that registry (next section).
 
