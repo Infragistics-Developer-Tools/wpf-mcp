@@ -1,0 +1,86 @@
+name: NuGet publish
+on:
+  release:
+    types: [created]
+
+# Nothing by default; each job asks for exactly what it needs.
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref_name }}
+
+env:
+  VERSION: ${{ github.ref_name }}
+
+jobs:
+  # Generates the data set from scratch (nothing under src/data is committed), builds
+  # both servers, tests, validates and packs the NuGet package. Windows only because
+  # of the type extractor. No publishing rights.
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - run: echo "Releasing ${VERSION}"
+
+      - uses: ./.github/actions/build-data
+        with:
+          nuget-feed-url: ${{ secrets.NUGET_FEED_URL }}
+          nuget-feed-username: ${{ secrets.NUGET_FEED_USERNAME }}
+          nuget-feed-password: ${{ secrets.NUGET_FEED_PASSWORD }}
+          package-version: ${{ env.VERSION }}
+
+      - name: Validate package contents
+        run: npm run validate:package -- --expected-version "$VERSION"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nupkg
+          path: "nupkg/*.nupkg"
+          if-no-files-found: error
+          retention-days: 5
+
+  # Publishes exactly the nupkg that was validated above. Same shape as
+  # IgniteUI/igniteui-blazor's release workflow: gated behind the nuget-org-publish
+  # environment, and nuget.org trusted publishing (OIDC) instead of a stored API key —
+  # NuGet/login exchanges the workflow's OIDC token for a short-lived key under the
+  # nuget.org account named by INFRAGISTICS_NUGET_ORG_USER (the account that owns the
+  # trust policy and the Infragistics.* prefix). No --skip-duplicate: nuget.org never
+  # accepts a version twice, and a rerun should fail loudly rather than pretend it shipped.
+  publish-nuget:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: nuget-org-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 8.0.x
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: nupkg
+          path: nupkg
+
+      - name: NuGet login (OIDC Trusted Publishing)
+        id: nuget-login
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1
+        with:
+          user: ${{ secrets.INFRAGISTICS_NUGET_ORG_USER }}
+
+      - name: Publish to NuGet.org
+        env:
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+        run: dotnet nuget push nupkg/*.nupkg --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json

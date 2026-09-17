@@ -20,7 +20,7 @@ All tools are read-only (`readOnlyHint: true`, `openWorldHint: false`) — none 
 
 ## Installation
 
-Two packages, same server, same data — pick whichever runtime you already have. Both are listed in the [MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.Infragistics-Developer-Tools/wpf-mcp`, and every release ships both from one build. All Infragistics data ships inside the package; nothing is downloaded at runtime.
+Two packages, same server, same data — pick whichever runtime you already have. Both are listed in the [MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.Infragistics-Developer-Tools/wpf-mcp`, and every release ships both from the same commit and data. All Infragistics data ships inside the package; nothing is downloaded at runtime.
 
 **npm** — [`@infragistics/wpf-mcp-server`](https://www.npmjs.com/package/@infragistics/wpf-mcp-server), requires **Node.js ≥ 20**:
 

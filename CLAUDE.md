@@ -40,7 +40,7 @@ Requirements: Node ≥ 20, .NET 8 SDK. The type extractor targets `net8.0-window
 
 There is no unit-test suite or linter; `npm test`/`test:dotnet` are the stdio smoke tests, `test:parity` the cross-runtime diff, and `npm run validate:package` the data + nupkg gate. All run in CI and before publish.
 
-Release/publish process (`npm run release -- <bump>` → PR → GitHub Release with bare tag → `npm-publish.yml`, which publishes npm + NuGet + MCP Registry), CI/cache layout, nuget.org trusted publishing, and data-source bumps are documented in `DEVELOPMENT.md` — read it before touching `.github/`, `server.json`, `server/*.csproj`, `scripts/version.ts` or `scripts/validate-package.ts`.
+Release/publish process (`npm run release -- <bump>` → PR → GitHub Release with bare tag → `nuget-publish.yml` publishes the NuGet package; then the manual `npm-publish.yml` workflow publishes npm and, optionally, the MCP Registry), CI/cache layout, nuget.org trusted publishing, and data-source bumps are documented in `DEVELOPMENT.md` — read it before touching `.github/`, `server.json`, `server/*.csproj`, `scripts/version.ts` or `scripts/validate-package.ts`.
 
 ## Architecture
 

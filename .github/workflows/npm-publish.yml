@@ -1,21 +1,30 @@
-name: Publish (npm + NuGet + MCP Registry)
+name: npm publish
 on:
-  release:
-    types: [created]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release to publish — the bare version whose GitHub release/tag already exists (e.g. 1.2.3 or 1.2.0-beta.1)"
+        required: true
+        type: string
+      mcp-registry:
+        description: "Also publish to the MCP Registry afterwards (non-prerelease only; the NuGet package for this version must already be on nuget.org)"
+        required: false
+        type: boolean
+        default: false
 
 # Nothing by default; each job asks for exactly what it needs.
 permissions: {}
 
 concurrency:
-  group: release-${{ github.ref_name }}
+  group: npm-${{ inputs.version }}
 
 env:
-  VERSION: ${{ github.ref_name }}
+  VERSION: ${{ inputs.version }}
 
 jobs:
-  # Generates the data set from scratch (nothing under src/data is committed), builds
-  # both servers, tests, validates and packs the npm tarball and the NuGet package.
-  # Windows only because of the type extractor. No publishing rights.
+  # Rebuilds the tag from scratch exactly like the NuGet workflow does (same composite
+  # action, same validation), so the npm tarball and the nupkg for a version are built
+  # from the same commit and the same data. Windows only because of the type extractor.
   build:
     runs-on: windows-latest
     timeout-minutes: 30
@@ -27,10 +36,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: refs/tags/${{ inputs.version }}
           submodules: recursive
           persist-credentials: false
 
-      - run: echo "Releasing ${VERSION}"
+      - run: echo "Publishing ${VERSION} to npm"
 
       - uses: ./.github/actions/build-data
         with:
@@ -52,15 +62,9 @@ jobs:
           if-no-files-found: error
           retention-days: 5
 
-      - uses: actions/upload-artifact@v7
-        with:
-          name: nupkg
-          path: "nupkg/*.nupkg"
-          if-no-files-found: error
-          retention-days: 5
-
   # Publishes exactly the tarball that was validated above — this job cannot rebuild.
-  # ubuntu so the npm/OIDC steps stay identical to igniteui-cli.
+  # Trusted publishing (OIDC): no NPM_TOKEN. The package must be configured on npmjs.com
+  # with this repository and this workflow file as its trusted publisher.
   publish-npm:
     needs: build
     runs-on: ubuntu-latest
@@ -88,63 +92,33 @@ jobs:
           echo "NPM_TAG=$NPM_TAG" >> $GITHUB_ENV
           echo "$NPM_TAG"
 
-      # Trusted publishing (OIDC): no NPM_TOKEN. The package must be configured on
-      # npmjs.com with this repository and workflow file as its trusted publisher.
       - name: Publish package
         run: npm publish ./*.tgz --tag ${NPM_TAG} --provenance
 
-  # Publishes exactly the nupkg that was validated above. Same shape as
-  # IgniteUI/igniteui-blazor's release workflow: gated behind the nuget-org-publish
-  # environment, and nuget.org trusted publishing (OIDC) instead of a stored API key —
-  # NuGet/login exchanges the workflow's OIDC token for a short-lived key under the
-  # nuget.org account named by INFRAGISTICS_NUGET_ORG_USER (the account that owns the
-  # trust policy and the Infragistics.* prefix). No --skip-duplicate: nuget.org never
-  # accepts a version twice, and a rerun should fail loudly rather than pretend it shipped.
-  publish-nuget:
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    environment: nuget-org-publish
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: 8.0.x
-
-      - uses: actions/download-artifact@v8
-        with:
-          name: nupkg
-          path: nupkg
-
-      - name: NuGet login (OIDC Trusted Publishing)
-        id: nuget-login
-        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1
-        with:
-          user: ${{ secrets.INFRAGISTICS_NUGET_ORG_USER }}
-
-      - name: Publish to NuGet.org
-        env:
-          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
-        run: dotnet nuget push nupkg/*.nupkg --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
-
-  # MCP Registry. Skipped for prereleases — the registry has no dist-tag equivalent, so
-  # publishing an alpha/beta/rc would make it the current version. mcp-publisher validates
-  # every server.json package against its registry, so it runs after both pushes and
-  # after nuget.org has indexed the nupkg (which lags a push by minutes).
+  # Opt-in. mcp-publisher validates every server.json package against its registry, so
+  # the NuGet package for this version must be on nuget.org already (nuget-publish.yml
+  # runs on release creation); the wait below covers nuget.org's indexing lag. Never for
+  # prereleases — the registry has no dist-tag equivalent, so publishing an alpha/beta/rc
+  # would make it the current version.
   publish-mcp-registry:
-    needs: [publish-npm, publish-nuget]
-    if: ${{ !github.event.release.prerelease }}
+    needs: publish-npm
+    if: ${{ inputs.mcp-registry }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
       id-token: write
     steps:
+      - name: Refuse prereleases
+        run: |
+          if [[ ${VERSION} == *"alpha"* || ${VERSION} == *"beta"* || ${VERSION} == *"rc"* ]]; then
+            echo "::error::${VERSION} is a prerelease — the MCP Registry has no dist-tags, so it is never published there."; exit 1
+          fi
+
       # Only for server.json, which mcp-publisher reads from the working directory.
       - uses: actions/checkout@v7
         with:
+          ref: refs/tags/${{ inputs.version }}
           persist-credentials: false
 
       - name: Wait for nuget.org indexing
@@ -155,7 +129,7 @@ jobs:
             if curl -fsSL -o /dev/null "$URL"; then echo "indexed: $URL"; exit 0; fi
             echo "not indexed yet ($i/60), waiting 20s…"; sleep 20
           done
-          echo "::error::nuget.org did not index ${ID} ${VERSION} within 20 minutes"; exit 1
+          echo "::error::nuget.org does not have ${ID} ${VERSION} — run the NuGet publish workflow for this release first"; exit 1
 
       - name: Download MCP Publisher
         run: |

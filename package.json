@@ -1,6 +1,6 @@
 {
   "name": "@infragistics/wpf-mcp-server",
-  "version": "0.0.1-alpha.1",
+  "version": "0.0.1-alpha.3",
   "mcpName": "io.github.Infragistics-Developer-Tools/wpf-mcp",
   "description": "MCP server for Infragistics NetAdvantage for WPF — component registry and API reference",
   "license": "MIT",
