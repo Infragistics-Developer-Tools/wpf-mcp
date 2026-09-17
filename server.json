@@ -7,12 +7,22 @@
     "source": "github",
     "url": "https://github.com/Infragistics-Developer-Tools/wpf-mcp"
   },
-  "version": "0.0.1-alpha.1",
+  "version": "0.0.1-alpha.3",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@infragistics/wpf-mcp-server",
-      "version": "0.0.1-alpha.1",
+      "version": "0.0.1-alpha.3",
+      "transport": {
+        "type": "stdio"
+      }
+    },
+    {
+      "registryType": "nuget",
+      "registryBaseUrl": "https://api.nuget.org/v3/index.json",
+      "identifier": "Infragistics.Wpf.Mcp",
+      "version": "0.0.1-alpha.3",
+      "runtimeHint": "dnx",
       "transport": {
         "type": "stdio"
       }

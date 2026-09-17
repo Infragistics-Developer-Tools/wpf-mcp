@@ -1,6 +1,6 @@
 {
   "name": "@infragistics/wpf-mcp-server",
-  "version": "0.0.1-alpha.1",
+  "version": "0.0.1-alpha.3",
   "mcpName": "io.github.Infragistics-Developer-Tools/wpf-mcp",
   "description": "MCP server for Infragistics NetAdvantage for WPF — component registry and API reference",
   "license": "MIT",
@@ -39,6 +39,10 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "test": "npx tsx scripts/smoke-test.ts",
+    "test:dotnet": "npx tsx scripts/smoke-test.ts --dotnet",
+    "test:parity": "npx tsx scripts/parity-test.ts",
+    "build:dotnet": "dotnet build server/Infragistics.Wpf.Mcp.csproj -nologo -v q",
+    "pack:dotnet": "npx tsx scripts/pack-dotnet.ts",
     "typecheck": "tsc --noEmit && tsc -p scripts",
     "validate:package": "npx tsx scripts/validate-package.ts",
     "docs:restore": "dotnet restore nuget/WpfDocs.csproj --packages nuget/packages",
