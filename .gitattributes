@@ -1,0 +1,5 @@
+# C# raw string literals carry the source file's line endings into the tool descriptions
+# and server instructions, which must match the TypeScript (always LF) byte-for-byte.
+# Without this a CRLF checkout (core.autocrlf=true, e.g. GitHub Windows runners) fails
+# the parity test with lines that look identical.
+server/**/*.cs text eol=lf

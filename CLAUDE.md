@@ -69,6 +69,7 @@ Release/publish process (`npm run release -- <bump>` → PR → GitHub Release w
 - `Tools/ComponentTools.cs`, `SearchTools.cs`, `DocsTools.cs`, `ThemeTools.cs` — one `[McpServerTool]` method per tool, `[Description]` = zod `.describe()`, DataAnnotations = zod constraints (schema-only; clamp in code). `Tools/ToolDescriptions.cs` mirrors `constants.ts`, `Tools/Enums.cs` the `z.enum()` lists, `Tools/ToolLog.cs` the `--debug` logger.
 - `Infragistics.Wpf.Mcp.csproj` — `PackAsTool` + `PackageType McpServer`; `src/data/**` is a `Content` item with `Pack="false"` (it ships inside the tool folder, not as NuGet content), root `server.json` is packed as `.mcp/server.json`.
 - Quirks are mirrored on purpose (JS `""` falsiness for optional strings) — see comments at each site. Change TS and C# together, then run `test:parity`.
+- `server/**/*.cs` must stay LF (`.gitattributes` enforces it): raw string literals carry the file's line endings into descriptions/instructions, and CRLF breaks parity with the TS (template literals always normalize to LF).
 
 ### Conventions worth knowing
 

@@ -149,7 +149,7 @@ Then the C# mirror — the parity test fails until it matches byte-for-byte:
 
 Finally add a case to `scripts/smoke-test.ts`, a few calls (including error paths) to `CALLS` in `scripts/parity-test.ts`, and, if the tool reads a new file family, a threshold to `scripts/validate-package.ts`.
 
-Porting gotchas that already bit once: JS `localeCompare` (use `NameComparer`) and JS truthiness of `""` for optional strings — see the comments at each site.
+Porting gotchas that already bit once: JS `localeCompare` (use `NameComparer`), JS truthiness of `""` for optional strings, and line endings — C# raw string literals keep the source file's newlines, so `server/**/*.cs` is pinned to LF in `.gitattributes`; a CRLF checkout fails the parity test with lines that look identical.
 
 Conventions:
 
