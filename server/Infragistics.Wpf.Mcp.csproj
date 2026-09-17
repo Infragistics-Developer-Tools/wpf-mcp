@@ -33,7 +33,7 @@
   <ItemGroup>
     <!-- Same generated data set the npm package ships; produced by `npm run build:data`. -->
     <Content Include="..\src\data\**" LinkBase="data" CopyToOutputDirectory="PreserveNewest" Pack="false" />
-    <None Include="..\README.md" Pack="true" PackagePath="\" />
+    <None Include="README.md" Pack="true" PackagePath="\" />
     <None Include="..\server.json" Pack="true" PackagePath=".mcp\server.json" />
   </ItemGroup>
 
