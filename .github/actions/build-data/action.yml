@@ -23,6 +23,12 @@ inputs:
   package-version:
     description: Version stamped into the NuGet package (the release tag). Defaults to package.json's.
     default: ""
+  skip-pack:
+    description: >
+      Skip the final "Pack NuGet package" step. Used by nuget-publish.yml, which packs
+      separately after Authenticode-signing the built server/bin output — packing here
+      first would just produce an unsigned nupkg that gets thrown away.
+    default: "false"
 
 runs:
   using: composite
@@ -109,10 +115,18 @@ runs:
       run: npm test
 
     # The C# server reads the same src/data; the parity test proves both runtimes
-    # return byte-identical tool output so either package can be installed.
+    # return byte-identical tool output so either package can be installed. Stamped
+    # with the release version (when given) because nuget-publish.yml signs and ships
+    # this exact build via `pack --no-build` — without it, the signed DLL's embedded
+    # version would stay the csproj default (0.0.0-dev) instead of the release tag.
     - name: Build C# server
       shell: bash
-      run: npm run build:dotnet
+      run: |
+        if [ -n "${{ inputs.package-version }}" ]; then
+          npm run build:dotnet -- "-p:Version=${{ inputs.package-version }}"
+        else
+          npm run build:dotnet
+        fi
 
     - name: Smoke test (C#)
       shell: bash
@@ -123,5 +137,6 @@ runs:
       run: npm run test:parity
 
     - name: Pack NuGet package
+      if: inputs.skip-pack != 'true'
       shell: bash
       run: npm run pack:dotnet -- --version "${{ inputs.package-version }}"

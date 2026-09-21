@@ -13,9 +13,10 @@ env:
   VERSION: ${{ github.ref_name }}
 
 jobs:
-  # Generates the data set from scratch (nothing under src/data is committed), builds
-  # both servers, tests, validates and packs the NuGet package. Windows only because
-  # of the type extractor. No publishing rights.
+  # Generates the data set from scratch (nothing under src/data is committed) and builds
+  # both servers, tests and validates them. Windows only because of the type extractor.
+  # No publishing rights, no Azure access — packing is deferred to a later job so the
+  # server/bin output can be Authenticode-signed before it gets zipped into the nupkg.
   build:
     runs-on: windows-latest
     timeout-minutes: 30
@@ -38,9 +39,171 @@ jobs:
           nuget-feed-username: ${{ secrets.NUGET_FEED_USERNAME }}
           nuget-feed-password: ${{ secrets.NUGET_FEED_PASSWORD }}
           package-version: ${{ env.VERSION }}
+          skip-pack: "true"
+
+      # server/bin + server/obj carry the built-but-unsigned tool output forward to the
+      # signing job; dist/** carries the data set forward for the package-contents check
+      # that runs once the nupkg exists, in the pack job below.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: build-output
+          path: |
+            server/bin/**
+            server/obj/**
+            dist/**
+          if-no-files-found: error
+          retention-days: 1
+
+  # Holds Azure Key Vault access, but no NuGet publishing rights. Signs only the assembly
+  # Infragistics authors (wpf-mcp.dll) — this is a `dotnet tool` (PackAsTool + Exe), so
+  # server/bin also carries third-party dependency DLLs (ModelContextProtocol,
+  # Microsoft.Extensions.*, ...) that are never signed with this certificate.
+  sign-assemblies:
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 20
+    environment: nuget-org-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 8.0.x
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: build-output
+          path: .
+
+      - name: Restore .NET local tools
+        run: dotnet tool restore
+
+      - name: Authenticate to Azure
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign wpf-mcp.dll
+        shell: pwsh
+        run: >
+          dotnet tool run sign code azure-key-vault "wpf-mcp.dll"
+          --base-directory "${{ github.workspace }}/server/bin/Release/net8.0"
+          --azure-key-vault-url "${{ secrets.AZURE_KEYVAULT_URL }}"
+          --azure-key-vault-certificate "${{ secrets.AZURE_KEYVAULT_CERTIFICATE }}"
+          --azure-credential-type azure-cli
+          --verbosity Warning
+
+      - name: Validate DLL signature
+        shell: pwsh
+        run: >
+          .github/scripts/Assert-AuthenticodeSignature.ps1
+          -Path "${{ github.workspace }}/server/bin/Release/net8.0/wpf-mcp.dll"
+          -ExpectedCertificateSha256Path "eng/IG.authenticode-certificates.sha256"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: signed-assemblies
+          path: |
+            server/bin/**
+            server/obj/**
+            dist/**
+          if-no-files-found: error
+          retention-days: 1
+
+  # Packs the signed DLL into the nupkg (--no-build, so packing cannot silently rebuild
+  # over the signed binary), validates its contents, then Authenticode-signs the nupkg
+  # itself. Same Azure access as sign-assemblies, still no NuGet publishing rights.
+  pack:
+    needs: sign-assemblies
+    runs-on: windows-latest
+    timeout-minutes: 20
+    environment: nuget-org-publish
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 8.0.x
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: signed-assemblies
+          path: .
+
+      # Pack resolves framework references against this runner, and the downloaded obj
+      # cache is not enough: without a restore here, pack fails with NETSDK1127 (targeting
+      # pack not installed) for the net8.0 TFM. Restoring is not a rebuild — the signed
+      # DLL stands, because packing itself runs with --no-build below.
+      - name: Restore .NET dependencies
+        run: dotnet restore server/Infragistics.Wpf.Mcp.csproj
+
+      - name: Pack NuGet package
+        run: npm run pack:dotnet -- --version "$VERSION" --no-build
 
       - name: Validate package contents
         run: npm run validate:package -- --expected-version "$VERSION"
+
+      # Re-checks the exact bytes that will ship, not just the loose bin/ output: pack
+      # only re-zips, but this proves it re-zipped the DLL that was actually signed.
+      - name: Validate packaged assembly signature
+        shell: pwsh
+        run: >
+          .github/scripts/Assert-PackageSignatures.ps1
+          -PackagePath (Get-ChildItem "${{ github.workspace }}/nupkg/*.nupkg").FullName
+          -AssemblyPath "tools/net8.0/any/wpf-mcp.dll"
+          -ExpectedCertificateSha256Path "eng/IG.authenticode-certificates.sha256"
+
+      - name: Restore .NET local tools
+        run: dotnet tool restore
+
+      - name: Authenticate to Azure
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # --recurse-containers false: wpf-mcp.dll inside was already signed above, so this
+      # only adds the outer NuGet package signature instead of re-signing the same DLL.
+      - name: Sign NuGet package
+        shell: pwsh
+        run: >
+          dotnet tool run sign code azure-key-vault "*.nupkg"
+          --base-directory "${{ github.workspace }}/nupkg"
+          --azure-key-vault-url "${{ secrets.AZURE_KEYVAULT_URL }}"
+          --azure-key-vault-certificate "${{ secrets.AZURE_KEYVAULT_CERTIFICATE }}"
+          --azure-credential-type azure-cli
+          --recurse-containers false
+          --verbosity Warning
+
+      - name: Validate NuGet package signature
+        shell: pwsh
+        run: >
+          .github/scripts/Assert-NuGetSignature.ps1
+          -PackagePath (Get-ChildItem "${{ github.workspace }}/nupkg/*.nupkg").FullName
+          -ExpectedCertificateSha256Path "eng/IG.authenticode-certificates.sha256"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -49,7 +212,7 @@ jobs:
           if-no-files-found: error
           retention-days: 5
 
-  # Publishes exactly the nupkg that was validated above. Same shape as
+  # Publishes exactly the signed nupkg that was validated above. Same shape as
   # IgniteUI/igniteui-blazor's release workflow: gated behind the nuget-org-publish
   # environment, and nuget.org trusted publishing (OIDC) instead of a stored API key —
   # NuGet/login exchanges the workflow's OIDC token for a short-lived key under the
@@ -57,7 +220,7 @@ jobs:
   # trust policy and the Infragistics.* prefix). No --skip-duplicate: nuget.org never
   # accepts a version twice, and a rerun should fail loudly rather than pretend it shipped.
   publish-nuget:
-    needs: build
+    needs: pack
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: nuget-org-publish
@@ -65,6 +228,16 @@ jobs:
       contents: read
       id-token: write
     steps:
+      # Sparse: this job only needs the signature-verification script and the pinned
+      # certificate fingerprint, not the rest of the source tree.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .github/scripts
+            eng/IG.authenticode-certificates.sha256
+          sparse-checkout-cone-mode: false
+
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 8.0.x
@@ -73,6 +246,15 @@ jobs:
         with:
           name: nupkg
           path: nupkg
+
+      # Re-verifies the signature on this fresh runner, immediately before push, rather
+      # than trusting that the artifact download carried over exactly what pack signed.
+      - name: Validate NuGet package signature
+        shell: pwsh
+        run: >
+          .github/scripts/Assert-NuGetSignature.ps1
+          -PackagePath (Get-ChildItem "${{ github.workspace }}/nupkg/*.nupkg").FullName
+          -ExpectedCertificateSha256Path "eng/IG.authenticode-certificates.sha256"
 
       - name: NuGet login (OIDC Trusted Publishing)
         id: nuget-login

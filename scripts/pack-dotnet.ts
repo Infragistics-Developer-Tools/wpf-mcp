@@ -2,12 +2,16 @@
 /**
  * pack-dotnet.ts — builds the NuGet package for the C# server into nupkg/.
  *
- *   npx tsx scripts/pack-dotnet.ts [--version 1.2.3]
+ *   npx tsx scripts/pack-dotnet.ts [--version 1.2.3] [--no-build]
  *
  * The version defaults to package.json's so a local pack matches what a release would
  * produce; the publish workflow passes the release tag explicitly. The csproj itself
  * carries no version (0.0.0-dev) — package.json is the single source, like server.json.
  * Requires src/data/ (the csproj copies it into the package).
+ *
+ * --no-build re-zips an already-built server/bin (and passes --no-restore) instead of
+ * rebuilding: the release workflow Authenticode-signs the built DLL before packing, and
+ * a rebuild here would silently overwrite that signed binary with an unsigned one.
  */
 
 import { execFileSync } from 'child_process';
@@ -30,13 +34,20 @@ if (arg === undefined || arg.startsWith('--')) {
 const version = arg.replace(/^v/, '')
   || (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8')) as { version: string }).version;
 
-if (!existsSync(join(ROOT, 'src', 'data', 'namespaces.json'))) {
+const noBuild = process.argv.includes('--no-build');
+
+// --no-build doesn't read src/data itself — the csproj's Content item already copied it
+// into server/bin/ during the earlier build this reuses. Checking here would demand a
+// directory the signing workflow deliberately doesn't carry forward.
+if (!noBuild && !existsSync(join(ROOT, 'src', 'data', 'namespaces.json'))) {
   console.error('src/data/ is missing — run npm run build:data first.');
   process.exit(1);
 }
 
 rmSync(OUT_DIR, { recursive: true, force: true });
-execFileSync('dotnet', ['pack', CSPROJ, '-c', 'Release', `-p:Version=${version}`, '-p:ContinuousIntegrationBuild=true', '-o', OUT_DIR, '-nologo', '-v', 'q'], {
+const packArgs = ['pack', CSPROJ, '-c', 'Release', `-p:Version=${version}`, '-p:ContinuousIntegrationBuild=true', '-o', OUT_DIR, '-nologo', '-v', 'q'];
+if (noBuild) packArgs.push('--no-build', '--no-restore');
+execFileSync('dotnet', packArgs, {
   cwd: ROOT,
   stdio: 'inherit',
 });
