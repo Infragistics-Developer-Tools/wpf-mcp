@@ -3,11 +3,11 @@
     Verifies the Authenticode signature of Infragistics' own assembly inside a packed NuGet package.
 
 .DESCRIPTION
-    Packing does not sign or rebuild; --no-build just re-zips whatever bin/ output is on disk. The
-    sign-assemblies job validates that loose output directly, but that is not proof the packed nupkg
-    contains those exact bytes. This extracts the package that will actually ship and re-runs the
-    Authenticode check against those bytes, so a pack step that picked up a stale or substituted DLL
-    is still caught.
+    The sign tool signs the assembly in place inside the nupkg, as selected by eng/sign-filelist.txt,
+    and then signs the package itself. A valid package signature says nothing about whether the inner
+    assembly was actually signed (a file list that matched nothing still yields a signed package), so
+    this extracts the package that will actually ship and runs the Authenticode check against those
+    exact bytes.
 
     Scoped to a single named assembly rather than every DLL in the package: this is a dotnet tool, so
     the output directory also carries third-party dependency assemblies (ModelContextProtocol,

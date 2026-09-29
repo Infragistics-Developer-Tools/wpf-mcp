@@ -2,16 +2,15 @@
 /**
  * pack-dotnet.ts — builds the NuGet package for the C# server into nupkg/.
  *
- *   npx tsx scripts/pack-dotnet.ts [--version 1.2.3] [--no-build]
+ *   npx tsx scripts/pack-dotnet.ts [--version 1.2.3]
  *
  * The version defaults to package.json's so a local pack matches what a release would
  * produce; the publish workflow passes the release tag explicitly. The csproj itself
  * carries no version (0.0.0-dev) — package.json is the single source, like server.json.
  * Requires src/data/ (the csproj copies it into the package).
  *
- * --no-build re-zips an already-built server/bin (and passes --no-restore) instead of
- * rebuilding: the release workflow Authenticode-signs the built DLL before packing, and
- * a rebuild here would silently overwrite that signed binary with an unsigned one.
+ * The nupkg is unsigned; the release workflow Authenticode-signs it (and wpf-mcp.dll
+ * inside it) afterwards with the `sign` tool, which signs package contents in place.
  */
 
 import { execFileSync } from 'child_process';
@@ -34,20 +33,13 @@ if (arg === undefined || arg.startsWith('--')) {
 const version = arg.replace(/^v/, '')
   || (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8')) as { version: string }).version;
 
-const noBuild = process.argv.includes('--no-build');
-
-// Needed even with --no-build: a PackAsTool pack still runs publish, which resolves the
-// csproj's ..\src\data\** Content glob from source rather than reusing server/bin/ — so
-// without src/data the nupkg silently ships with no data at all.
 if (!existsSync(join(ROOT, 'src', 'data', 'namespaces.json'))) {
   console.error('src/data/ is missing — run npm run build:data first.');
   process.exit(1);
 }
 
 rmSync(OUT_DIR, { recursive: true, force: true });
-const packArgs = ['pack', CSPROJ, '-c', 'Release', `-p:Version=${version}`, '-p:ContinuousIntegrationBuild=true', '-o', OUT_DIR, '-nologo', '-v', 'q'];
-if (noBuild) packArgs.push('--no-build', '--no-restore');
-execFileSync('dotnet', packArgs, {
+execFileSync('dotnet', ['pack', CSPROJ, '-c', 'Release', `-p:Version=${version}`, '-p:ContinuousIntegrationBuild=true', '-o', OUT_DIR, '-nologo', '-v', 'q'], {
   cwd: ROOT,
   stdio: 'inherit',
 });
