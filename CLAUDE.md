@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A stdio MCP server exposing 9 read-only tools over Infragistics NetAdvantage for WPF: component registry, API reference, keyword search, docs search, project scaffolding, and theming. It ships as two runtimes over one data set: TypeScript in `src/` (npm `@infragistics/wpf-mcp-server`) and C# in `server/` (NuGet `Infragistics.Wpf.Mcp`, a `dotnet tool`). All data is pre-generated at build time into `src/data/` (gitignored) and served from `dist/data/` / the tool's `data/` folder as plain JSON/XAML file reads — no reflection or network at runtime. The two runtimes must return byte-identical output; `scripts/parity-test.ts` enforces it.
+A stdio MCP server exposing 9 read-only tools over Infragistics NetAdvantage for WPF: component registry, API reference, keyword search, docs search, project scaffolding, and theming. It ships as two runtimes over one data set: TypeScript in `src/` (npm `infragistics-wpf-mcp`) and C# in `server/` (NuGet `Infragistics.Wpf.Mcp`, a `dotnet tool`). All data is pre-generated at build time into `src/data/` (gitignored) and served from `dist/data/` / the tool's `data/` folder as plain JSON/XAML file reads — no reflection or network at runtime. The two runtimes must return byte-identical output; `scripts/parity-test.ts` enforces it.
 
 ## Commands
 

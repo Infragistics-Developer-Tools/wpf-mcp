@@ -2,7 +2,7 @@
 
 MCP server for **Infragistics NetAdvantage for WPF** — component registry, XAML namespace lookup, full API reference with property types and enum values, keyword search across 6,900+ types, and named-theme setup with palette re-coloring.
 
-Available as an npm package ([`@infragistics/wpf-mcp-server`](https://www.npmjs.com/package/@infragistics/wpf-mcp-server), this README) and as a NuGet `dotnet tool` ([`Infragistics.Wpf.Mcp`](https://www.nuget.org/packages/Infragistics.Wpf.Mcp), [its README](https://github.com/Infragistics-Developer-Tools/wpf-mcp/blob/main/server/README.md)). Same server, same data, identical results — pick whichever runtime you already have.
+Available as an npm package ([`infragistics-wpf-mcp`](https://www.npmjs.com/package/infragistics-wpf-mcp), this README) and as a NuGet `dotnet tool` ([`Infragistics.Wpf.Mcp`](https://www.nuget.org/packages/Infragistics.Wpf.Mcp), [its README](https://github.com/Infragistics-Developer-Tools/wpf-mcp/blob/main/server/README.md)). Same server, same data, identical results — pick whichever runtime you already have.
 
 ## Tools
 
@@ -25,7 +25,7 @@ All tools are read-only (`readOnlyHint: true`, `openWorldHint: false`) — none 
 Requires **Node.js ≥ 20**; nothing else — all Infragistics data ships inside the package and nothing is downloaded at runtime. Listed in the [MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.Infragistics-Developer-Tools/wpf-mcp`.
 
 ```bash
-npx -y @infragistics/wpf-mcp-server
+npx -y infragistics-wpf-mcp
 ```
 
 Prefer .NET? `dotnet tool install -g Infragistics.Wpf.Mcp` gives you the same server as the `wpf-mcp` command (or `dnx Infragistics.Wpf.Mcp --yes` with the .NET 10 SDK) — see the [NuGet package README](https://github.com/Infragistics-Developer-Tools/wpf-mcp/blob/main/server/README.md) for its client configuration.
@@ -39,7 +39,7 @@ Prefer .NET? `dotnet tool install -g Infragistics.Wpf.Mcp` gives you the same se
   "mcpServers": {
     "infragistics-wpf": {
       "command": "npx",
-      "args": ["-y", "@infragistics/wpf-mcp-server"]
+      "args": ["-y", "infragistics-wpf-mcp"]
     }
   }
 }
@@ -52,7 +52,7 @@ Prefer .NET? `dotnet tool install -g Infragistics.Wpf.Mcp` gives you the same se
   "servers": {
     "infragistics-wpf": {
       "command": "npx",
-      "args": ["-y", "@infragistics/wpf-mcp-server"]
+      "args": ["-y", "infragistics-wpf-mcp"]
     }
   }
 }
@@ -61,7 +61,7 @@ Prefer .NET? `dotnet tool install -g Infragistics.Wpf.Mcp` gives you the same se
 **Claude Code** — from a terminal:
 
 ```bash
-claude mcp add infragistics-wpf -- npx -y @infragistics/wpf-mcp-server
+claude mcp add infragistics-wpf -- npx -y infragistics-wpf-mcp
 ```
 
 Add `"--debug"` to `args` (or after the package name) for any client to log every tool call/response to `wpf-mcp.log` in your system temp folder (override with the `WPF_MCP_LOG` environment variable) — see [Troubleshooting](#troubleshooting).

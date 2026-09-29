@@ -93,7 +93,7 @@ All tools are annotated `readOnlyHint: true`, `openWorldHint: false` — none of
 
 ## Also available on npm
 
-The same server, built from the same data, is published as [`@infragistics/wpf-mcp-server`](https://www.npmjs.com/package/@infragistics/wpf-mcp-server) for Node.js (`npx -y @infragistics/wpf-mcp-server`). Both packages return identical results.
+The same server, built from the same data, is published as [`infragistics-wpf-mcp`](https://www.npmjs.com/package/infragistics-wpf-mcp) for Node.js (`npx -y infragistics-wpf-mcp`). Both packages return identical results.
 
 ## Links
 

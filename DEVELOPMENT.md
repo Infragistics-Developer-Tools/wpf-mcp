@@ -1,6 +1,6 @@
 # Development
 
-How to build, test, release and publish `@infragistics/wpf-mcp-server` (npm) and `Infragistics.Wpf.Mcp` (NuGet). For what the server does and how to install it, see [README.md](README.md).
+How to build, test, release and publish `infragistics-wpf-mcp` (npm) and `Infragistics.Wpf.Mcp` (NuGet). For what the server does and how to install it, see [README.md](README.md).
 
 ## Prerequisites
 
@@ -170,7 +170,7 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`fe
 2. Review the diff, commit as `chore(release): 1.2.3`, open a PR, merge.
 3. On GitHub, **Releases → Draft a new release**, tag = the **bare version** (`1.2.3`, no `v`) on the merge commit, generate notes, publish. Tick *pre-release* for `-alpha`/`-beta`/`-rc` versions.
 4. The *NuGet publish* workflow (`nuget-publish.yml`) runs on release creation and pushes `Infragistics.Wpf.Mcp` to nuget.org. Watch it under Actions.
-5. Actions → *npm publish* → *Run workflow*: enter the same version; it rebuilds the tag and publishes `@infragistics/wpf-mcp-server`. Tick *mcp-registry* to also publish to the MCP Registry once nuget.org has the version (non-prerelease only).
+5. Actions → *npm publish* → *Run workflow*: enter the same version; it rebuilds the tag and publishes `infragistics-wpf-mcp`. Tick *mcp-registry* to also publish to the MCP Registry once nuget.org has the version (non-prerelease only).
 
 A prerelease version (`-alpha`/`-beta`/`-rc`) is a normal SemVer prerelease on nuget.org (`dotnet tool install` skips it unless `--prerelease` is passed) and goes to npm under the `next` dist-tag; it is **not** pushed to the MCP Registry (it has no dist-tag equivalent; publishing a beta there would make it the current version).
 
