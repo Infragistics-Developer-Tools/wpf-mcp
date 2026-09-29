@@ -86,9 +86,9 @@ jobs:
       - name: Authenticate to Azure
         uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.AZURE_KEYVAULT_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_KEYVAULT_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_KEYVAULT_SUBSCRIPTION_ID }}
 
       - name: Sign wpf-mcp.dll
         shell: pwsh
@@ -181,9 +181,9 @@ jobs:
       - name: Authenticate to Azure
         uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.AZURE_KEYVAULT_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_KEYVAULT_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_KEYVAULT_SUBSCRIPTION_ID }}
 
       # --recurse-containers false: wpf-mcp.dll inside was already signed above, so this
       # only adds the outer NuGet package signature instead of re-signing the same DLL.
