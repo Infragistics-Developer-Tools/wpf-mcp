@@ -43,7 +43,9 @@ jobs:
 
       # server/bin + server/obj carry the built-but-unsigned tool output forward to the
       # signing job; dist/** carries the data set forward for the package-contents check
-      # that runs once the nupkg exists, in the pack job below.
+      # that runs once the nupkg exists, in the pack job below. src/data/** is what pack
+      # actually puts in the nupkg: a PackAsTool pack publishes even with --no-build, and
+      # publish resolves the csproj's ..\src\data\** Content glob from source, not bin/.
       - uses: actions/upload-artifact@v7
         with:
           name: build-output
@@ -51,6 +53,7 @@ jobs:
             server/bin/**
             server/obj/**
             dist/**
+            src/data/**
           if-no-files-found: error
           retention-days: 1
 
@@ -114,6 +117,7 @@ jobs:
             server/bin/**
             server/obj/**
             dist/**
+            src/data/**
           if-no-files-found: error
           retention-days: 1
 

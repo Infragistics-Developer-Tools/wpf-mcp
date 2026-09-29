@@ -36,10 +36,10 @@ const version = arg.replace(/^v/, '')
 
 const noBuild = process.argv.includes('--no-build');
 
-// --no-build doesn't read src/data itself — the csproj's Content item already copied it
-// into server/bin/ during the earlier build this reuses. Checking here would demand a
-// directory the signing workflow deliberately doesn't carry forward.
-if (!noBuild && !existsSync(join(ROOT, 'src', 'data', 'namespaces.json'))) {
+// Needed even with --no-build: a PackAsTool pack still runs publish, which resolves the
+// csproj's ..\src\data\** Content glob from source rather than reusing server/bin/ — so
+// without src/data the nupkg silently ships with no data at all.
+if (!existsSync(join(ROOT, 'src', 'data', 'namespaces.json'))) {
   console.error('src/data/ is missing — run npm run build:data first.');
   process.exit(1);
 }
