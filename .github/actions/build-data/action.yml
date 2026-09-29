@@ -119,21 +119,28 @@ runs:
     # with the release version (when given) because nuget-publish.yml signs and ships
     # this exact build via `pack --no-build` — without it, the signed DLL's embedded
     # version would stay the csproj default (0.0.0-dev) instead of the release tag.
+    # Release, not build:dotnet's Debug default: that is the configuration
+    # nuget-publish.yml signs (server/bin/Release/net8.0) and packs with --no-build, so
+    # the tests below exercise the same binary that ships.
     - name: Build C# server
       shell: bash
       run: |
         if [ -n "${{ inputs.package-version }}" ]; then
-          npm run build:dotnet -- "-p:Version=${{ inputs.package-version }}"
+          npm run build:dotnet -- -c Release "-p:Version=${{ inputs.package-version }}"
         else
-          npm run build:dotnet
+          npm run build:dotnet -- -c Release
         fi
 
     - name: Smoke test (C#)
       shell: bash
+      env:
+        WPF_MCP_DOTNET_DLL: ${{ github.workspace }}/server/bin/Release/net8.0/wpf-mcp.dll
       run: npm run test:dotnet
 
     - name: Parity test (Node vs C#)
       shell: bash
+      env:
+        WPF_MCP_DOTNET_DLL: ${{ github.workspace }}/server/bin/Release/net8.0/wpf-mcp.dll
       run: npm run test:parity
 
     - name: Pack NuGet package
