@@ -22,5 +22,7 @@ export function loadThemeResource(relPath: string): string | null {
   const stats = statSync(fullPath, { throwIfNoEntry: false });
   if (!stats?.isFile()) return null;
 
-  return readFileSync(fullPath, 'utf-8');
+  // Strip the UTF-8 BOM every wpf-resources file starts with — readFileSync keeps it as
+  // U+FEFF, which would land inside the returned ```xml block and shift truncation.
+  return readFileSync(fullPath, 'utf-8').replace(/^﻿/, '');
 }
