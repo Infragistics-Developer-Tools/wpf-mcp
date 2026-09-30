@@ -26,7 +26,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
           persist-credentials: false
@@ -43,7 +43,7 @@ jobs:
       - name: Validate package contents
         run: npm run validate:package -- --expected-version "$VERSION"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: unsigned-nupkg
           path: "nupkg/*.nupkg"
@@ -67,7 +67,7 @@ jobs:
     steps:
       # Sparse: the sign tool pin, the file list, the validation scripts and the pinned
       # certificate fingerprint — nothing that could be built.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           sparse-checkout: |
@@ -76,11 +76,11 @@ jobs:
             eng
           sparse-checkout-cone-mode: false
 
-      - uses: actions/setup-dotnet@v6
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 10.0.x
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: unsigned-nupkg
           path: nupkg
@@ -111,7 +111,7 @@ jobs:
         run: >
           .github/scripts/Assert-PackageSignatures.ps1
           -PackagePath (Get-ChildItem "${{ github.workspace }}/nupkg/*.nupkg").FullName
-          -AssemblyPath "tools/net8.0/any/wpf-mcp.dll"
+          -AssemblyPath "tools/net10.0/any/wpf-mcp.dll"
           -ExpectedCertificateSha256Path "eng/IG.authenticode-certificates.sha256"
 
       - name: Validate NuGet package signature
@@ -121,7 +121,7 @@ jobs:
           -PackagePath (Get-ChildItem "${{ github.workspace }}/nupkg/*.nupkg").FullName
           -ExpectedCertificateSha256Path "eng/IG.authenticode-certificates.sha256"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: nupkg
           path: "nupkg/*.nupkg"
@@ -146,7 +146,7 @@ jobs:
     steps:
       # Sparse: this job only needs the signature-verification script and the pinned
       # certificate fingerprint, not the rest of the source tree.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           sparse-checkout: |
@@ -154,11 +154,11 @@ jobs:
             eng/IG.authenticode-certificates.sha256
           sparse-checkout-cone-mode: false
 
-      - uses: actions/setup-dotnet@v6
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 10.0.x
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: nupkg
           path: nupkg
@@ -174,7 +174,7 @@ jobs:
 
       - name: NuGet login (OIDC Trusted Publishing)
         id: nuget-login
-        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
         with:
           user: ${{ secrets.INFRAGISTICS_NUGET_ORG_USER }}
 
@@ -182,3 +182,46 @@ jobs:
         env:
           NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
         run: dotnet nuget push nupkg/*.nupkg --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+
+  # Lists the version in the MCP Registry (registry.modelcontextprotocol.io). The registry
+  # hosts metadata only: mcp-publisher checks that server.json's NuGet package exists on
+  # nuget.org and that its README carries `mcp-name: <server name>` (validate:package
+  # already checked the marker). Skipped for prereleases — the registry has no dist-tags,
+  # so publishing an alpha/beta/rc would make it the current version.
+  publish-mcp-registry:
+    needs: publish-nuget
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Only for server.json, which mcp-publisher reads from the working directory.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: server.json
+          sparse-checkout-cone-mode: false
+
+      # A fresh push can take minutes to become visible in nuget.org's flat container,
+      # and mcp-publisher fails if it cannot find the package there yet.
+      - name: Wait for nuget.org indexing
+        run: |
+          ID=$(jq -r '.packages[] | select(.registryType == "nuget") | .identifier | ascii_downcase' server.json)
+          URL="https://api.nuget.org/v3-flatcontainer/${ID}/${VERSION,,}/${ID}.nuspec"
+          for i in $(seq 1 60); do
+            if curl -fsSL -o /dev/null "$URL"; then echo "indexed: $URL"; exit 0; fi
+            echo "not indexed yet ($i/60), waiting 20s…"; sleep 20
+          done
+          echo "::error::nuget.org still does not serve ${ID} ${VERSION}"; exit 1
+
+      - name: Download MCP Publisher
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar -xz -f - mcp-publisher
+          chmod +x mcp-publisher
+
+      - name: Publish to MCP Registry
+        run: |
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish

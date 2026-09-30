@@ -1,3 +1,20 @@
+## [0.0.1-alpha.5](https://github.com/Infragistics-Developer-Tools/wpf-mcp/compare/0.0.1-alpha.4...0.0.1-alpha.5) (2026-09-30)
+
+
+### ⚠ BREAKING CHANGES
+
+* **server:** the `Infragistics.Wpf.Mcp` dotnet tool now targets .NET 10 and requires the .NET 10 runtime or newer (was .NET 8, which reaches end of support on 2026-11-10)
+* **npm:** the npm package is no longer published; `Infragistics.Wpf.Mcp` on NuGet is the only distribution
+
+### Features
+
+* **server:** the NuGet package is listed in the MCP Registry as `io.github.Infragistics-Developer-Tools/wpf-mcp` (stable versions only)
+* **server:** the NuGet package includes `LICENSE` and `THIRD-PARTY-NOTICES.txt` for the bundled libraries
+* **server:** package author and assembly metadata now read `Infragistics` / `Infragistics MCP Server for WPF`
+* **server:** fewer bundled assemblies — .NET 10 provides the `System.*` libraries that .NET 8 lacked
+
+
+
 ## [0.0.1-alpha.4](https://github.com/Infragistics-Developer-Tools/wpf-mcp/compare/0.0.1-alpha.3...0.0.1-alpha.4) (2026-09-29)
 
 

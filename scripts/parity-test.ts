@@ -19,7 +19,7 @@ import { fileURLToPath } from 'url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 const NODE_ENTRY = join(ROOT, 'dist', 'index.js');
-const DOTNET_DLL = process.env.WPF_MCP_DOTNET_DLL ?? join(ROOT, 'server', 'bin', 'Debug', 'net8.0', 'wpf-mcp.dll');
+const DOTNET_DLL = process.env.WPF_MCP_DOTNET_DLL ?? join(ROOT, 'server', 'bin', 'Debug', 'net10.0', 'wpf-mcp.dll');
 
 type Call = { tool: string; args: Record<string, unknown> };
 

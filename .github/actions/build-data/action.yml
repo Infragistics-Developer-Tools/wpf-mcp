@@ -4,8 +4,8 @@ description: >
   (type extractor → API → docs → themes), compiles both servers (Node and
   C#), runs the smoke test against each and the cross-runtime parity test,
   then packs the NuGet package into nupkg/. Windows only — the type extractor
-  loads WPF assemblies. Shared by nodejs.yml and npm-publish.yml so the two
-  can never drift.
+  loads WPF assemblies. Shared by nodejs.yml and nuget-publish.yml so CI and
+  the release can never drift.
 
 inputs:
   node-version:
@@ -27,14 +27,19 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-node@v7
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
       with:
         node-version: ${{ inputs.node-version }}
         cache: npm
 
-    - uses: actions/setup-dotnet@v6
+    # 10.0.x builds everything (global.json pins it) and is what the server targets;
+    # 8.0.x only supplies the runtime the build-time type extractor (net8.0-windows)
+    # runs on.
+    - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
       with:
-        dotnet-version: 8.0.x
+        dotnet-version: |
+          8.0.x
+          10.0.x
 
     # nuget/nuget.config is gitignored; it is written here only when the feed
     # secrets are present (they are not on pull requests from forks, which then
@@ -76,7 +81,7 @@ runs:
     # The restore is the slowest step by far (88 packages). Keyed on the csproj so
     # a version bump is the only thing that invalidates it.
     - name: Cache NuGet packages
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: nuget/packages
         key: nuget-${{ runner.os }}-${{ hashFiles('nuget/WpfDocs.csproj') }}
@@ -84,7 +89,7 @@ runs:
     # The extractor's output depends only on the packages and its own source;
     # scripts/generate.ts skips the dotnet run when this file is newer than both.
     - name: Cache extracted type info
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: nuget/type-info.json
         key: type-info-${{ runner.os }}-${{ hashFiles('nuget/WpfDocs.csproj', 'scripts/type-extractor/**') }}

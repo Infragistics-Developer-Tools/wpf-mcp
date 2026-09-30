@@ -26,7 +26,7 @@ const DIST     = join(ROOT, 'dist');
 const DATA     = join(DIST, 'data');
 const NUPKG    = join(ROOT, 'nupkg');
 const CSPROJ   = join(ROOT, 'server', 'Infragistics.Wpf.Mcp.csproj');
-const TOOL_DIR = 'tools/net8.0/any/';
+const TOOL_DIR = 'tools/net10.0/any/';
 
 const MIN_COMPONENTS      = 150;
 const MIN_SEARCH_ENTRIES  = 5000;
@@ -86,8 +86,10 @@ const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8'));
 const expectedVersion = getExpectedVersion();
 const nugetId = /<PackageId>(.*?)<\/PackageId>/.exec(readFileSync(CSPROJ, 'utf-8'))?.[1] ?? '';
 if (!nugetId) errors.push(`no <PackageId> in ${CSPROJ}`);
-// What each server.json package entry must be named, by registry.
+// What each server.json package entry must be named, by registry. Only NuGet is published
+// (and so required); an npm entry is still recognized in case npm publishing is revived.
 const REGISTRY_IDENTIFIERS: Record<string, string> = { npm: pkg.name, nuget: nugetId };
+const REQUIRED_REGISTRIES = ['nuget'];
 if (expectedVersion) {
   if (pkg.version !== expectedVersion) {
     errors.push(`package.json version mismatch: got ${pkg.version}, expected ${expectedVersion}`);
@@ -107,7 +109,7 @@ if (expectedVersion) {
     }
     const pkgs: Array<{ registryType?: string; identifier?: string; version?: string }> = serverJson.packages ?? [];
     if (pkgs.length === 0) errors.push('server.json has no entries in "packages"');
-    for (const registry of Object.keys(REGISTRY_IDENTIFIERS)) {
+    for (const registry of REQUIRED_REGISTRIES) {
       if (!pkgs.some(p => p.registryType === registry)) errors.push(`server.json has no "${registry}" entry in "packages"`);
     }
     pkgs.forEach((p, i) => {
@@ -239,12 +241,24 @@ if (nupkgFiles.length === 0) {
 
   const packagedServerJson = zip.readText('.mcp/server.json');
   if (!packagedServerJson) {
-    errors.push('nupkg lacks .mcp/server.json — the MCP Registry cannot verify NuGet ownership without it');
+    errors.push('nupkg lacks .mcp/server.json — nuget.org and MCP clients read the server configuration from it');
   } else if (packagedServerJson !== readFileSync(join(ROOT, 'server.json'), 'utf-8').replace(/^\uFEFF/, '')) {
     errors.push('nupkg .mcp/server.json differs from the repository server.json — rerun npm run pack:dotnet');
   }
 
-  for (const required of [`${TOOL_DIR}wpf-mcp.dll`, `${TOOL_DIR}DotnetToolSettings.xml`, 'README.md']) {
+  // The MCP Registry proves NuGet ownership by finding `mcp-name: <server.json name>` in the
+  // packaged README. Checked here because the registry only rejects it after the push to
+  // nuget.org, when the version can no longer be replaced.
+  const serverName: string = JSON.parse(readFileSync(join(ROOT, 'server.json'), 'utf-8').replace(/^﻿/, '')).name ?? '';
+  const readme = zip.readText('README.md') ?? '';
+  const marker = new RegExp(`mcp-name: ${serverName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s|-->|<|$)`);
+  if (!serverName || !marker.test(readme)) {
+    errors.push(`nupkg README.md lacks "mcp-name: ${serverName}" — the MCP Registry could not verify NuGet ownership`);
+  } else {
+    ok('mcp', serverName, 'mcp-name marker in nupkg README.md');
+  }
+
+  for (const required of [`${TOOL_DIR}wpf-mcp.dll`, `${TOOL_DIR}DotnetToolSettings.xml`, 'README.md', 'LICENSE', 'THIRD-PARTY-NOTICES.txt']) {
     if (!zip.has(required)) errors.push(`nupkg lacks ${required}`);
   }
   const stray = names.filter(n => n.startsWith('content/') || n.startsWith('contentFiles/'));

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A stdio MCP server exposing 9 read-only tools over Infragistics NetAdvantage for WPF: component registry, API reference, keyword search, docs search, project scaffolding, and theming. It ships as two runtimes over one data set: TypeScript in `src/` (npm `infragistics-wpf-mcp`) and C# in `server/` (NuGet `Infragistics.Wpf.Mcp`, a `dotnet tool`). All data is pre-generated at build time into `src/data/` (gitignored) and served from `dist/data/` / the tool's `data/` folder as plain JSON/XAML file reads — no reflection or network at runtime. The two runtimes must return byte-identical output; `scripts/parity-test.ts` enforces it.
+A stdio MCP server exposing 9 read-only tools over Infragistics NetAdvantage for WPF: component registry, API reference, keyword search, docs search, project scaffolding, and theming. It has two runtimes over one data set: C# in `server/` (NuGet `Infragistics.Wpf.Mcp`, a `net10.0` `dotnet tool`, the only published package) and TypeScript in `src/` (npm packaging kept but no longer published). All data is pre-generated at build time into `src/data/` (gitignored) and served from `dist/data/` / the tool's `data/` folder as plain JSON/XAML file reads — no reflection or network at runtime. The two runtimes must return byte-identical output; `scripts/parity-test.ts` enforces it.
 
 ## Commands
 
@@ -36,11 +36,11 @@ npm run ensure-submodules
 npm run docs:update      # pull latest for the 3 docs/theme submodules
 ```
 
-Requirements: Node ≥ 20, .NET 8 SDK. The type extractor targets `net8.0-windows` with `UseWPF`, so `generate:types` only runs on Windows. Submodules `docs/docs-wpf`, `docs/docs-common`, `docs/wpf-resources` are auto-initialized by `build:docs`/`build:themes` via `scripts/ensure-submodules.ts`.
+Requirements: Node ≥ 20, .NET 10 SDK (pinned by `global.json`), plus the .NET 8 WindowsDesktop runtime for the type extractor, which still targets `net8.0-windows` with `UseWPF` — so `generate:types` only runs on Windows. Submodules `docs/docs-wpf`, `docs/docs-common`, `docs/wpf-resources` are auto-initialized by `build:docs`/`build:themes` via `scripts/ensure-submodules.ts`.
 
 There is no unit-test suite or linter; `npm test`/`test:dotnet` are the stdio smoke tests, `test:parity` the cross-runtime diff, and `npm run validate:package` the data + nupkg gate. All run in CI and before publish.
 
-Release/publish process (`npm run release -- <bump>` → PR → GitHub Release with bare tag → `nuget-publish.yml` publishes the NuGet package; then the manual `npm-publish.yml` workflow publishes npm and, optionally, the MCP Registry), CI/cache layout, nuget.org trusted publishing, and data-source bumps are documented in `DEVELOPMENT.md` — read it before touching `.github/`, `server.json`, `server/*.csproj`, `scripts/version.ts` or `scripts/validate-package.ts`.
+Release/publish process (`npm run release -- <bump>` → PR → GitHub Release with bare tag → `nuget-publish.yml` builds, signs and publishes the NuGet package, then lists non-prerelease versions in the MCP Registry), CI/cache layout, SHA-pinned actions, nuget.org trusted publishing, and data-source bumps are documented in `DEVELOPMENT.md` — read it before touching `.github/`, `server.json`, `server/*.csproj`, `scripts/version.ts` or `scripts/validate-package.ts`.
 
 ## Architecture
 

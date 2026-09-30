@@ -1,12 +1,14 @@
 # Infragistics WPF MCP Server
 
+<!-- mcp-name: io.github.Infragistics-Developer-Tools/wpf-mcp -->
+
 MCP server for **Infragistics NetAdvantage for WPF** — component registry, XAML namespace lookup, full API reference with property types and enum values, keyword search across 6,900+ types, 2,600+ documentation topics, and named-theme setup with palette re-coloring. Everything an AI coding agent needs to write correct Infragistics XAML instead of guessing.
 
 Packaged as a `dotnet tool`. All Infragistics data ships inside the package; nothing is downloaded at runtime, and every tool is read-only.
 
 ## Install
 
-Requires the **.NET 8 runtime** or newer.
+Requires the **.NET 10 runtime** or newer.
 
 ```bash
 dotnet tool install -g Infragistics.Wpf.Mcp
@@ -91,12 +93,8 @@ All tools are annotated `readOnlyHint: true`, `openWorldHint: false` — none of
 - **`wpf-mcp` is not found** after `dotnet tool install -g` — the global tools folder (`%USERPROFILE%\.dotnet\tools` on Windows, `~/.dotnet/tools` elsewhere) is not on the `PATH` of the process that launches the client. Restart the client, or use the full path as `command`.
 - **An answer looks wrong or a control seems missing** — this is usually stale data in Infragistics' own NuGet package (summaries, base types) rather than a bug in this server. Cross-check against the pinned version above before assuming the MCP itself is at fault.
 
-## Also available on npm
-
-The same server, built from the same data, is published as [`infragistics-wpf-mcp`](https://www.npmjs.com/package/infragistics-wpf-mcp) for Node.js (`npx -y infragistics-wpf-mcp`). Both packages return identical results.
-
 ## Links
 
 - Source, issues and contributing: [github.com/Infragistics-Developer-Tools/wpf-mcp](https://github.com/Infragistics-Developer-Tools/wpf-mcp)
 - MCP Registry: `io.github.Infragistics-Developer-Tools/wpf-mcp`
-- License: MIT
+- License: MIT; bundled third-party libraries are listed in `THIRD-PARTY-NOTICES.txt` inside the package

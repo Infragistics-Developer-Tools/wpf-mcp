@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <RollForward>LatestMajor</RollForward>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -16,7 +16,10 @@
     <ToolCommandName>wpf-mcp</ToolCommandName>
     <PackageId>Infragistics.Wpf.Mcp</PackageId>
     <PackageType>McpServer</PackageType>
-    <Authors>Infragistics Developer Tools</Authors>
+    <Authors>Infragistics</Authors>
+    <Company>Infragistics</Company>
+    <Product>Infragistics MCP Server for WPF</Product>
+    <AssemblyTitle>Infragistics MCP Server for WPF</AssemblyTitle>
     <Description>MCP server for Infragistics NetAdvantage for WPF — component registry and API reference</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/Infragistics-Developer-Tools/wpf-mcp</PackageProjectUrl>
@@ -27,13 +30,15 @@
 
   <ItemGroup>
     <PackageReference Include="ModelContextProtocol" Version="2.2.0" />
-    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Same generated data set the npm package ships; produced by `npm run build:data`. -->
+    <!-- Same generated data set the TypeScript server reads; produced by `npm run build:data`. -->
     <Content Include="..\src\data\**" LinkBase="data" CopyToOutputDirectory="PreserveNewest" Pack="false" />
     <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="..\LICENSE" Pack="true" PackagePath="\" />
+    <None Include="..\THIRD-PARTY-NOTICES.txt" Pack="true" PackagePath="\" />
     <None Include="..\server.json" Pack="true" PackagePath=".mcp\server.json" />
   </ItemGroup>
 
