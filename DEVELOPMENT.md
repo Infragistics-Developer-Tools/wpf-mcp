@@ -173,6 +173,13 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`fe
 2. Review the diff, commit as `chore(release): 1.2.3`, open a PR, merge.
 3. On GitHub, **Releases → Draft a new release**, tag = the **bare version** (`1.2.3`, no `v`) on the merge commit, generate notes, publish. Tick *pre-release* for `-alpha`/`-beta`/`-rc` versions.
 4. The *NuGet publish* workflow (`nuget-publish.yml`) runs on release creation, pushes `Infragistics.Wpf.Mcp` to nuget.org and then lists the version in the MCP Registry. Watch it under Actions.
+5. Verify what users get, from a clean machine or a throwaway tool path:
+   ```bash
+   dotnet tool install --tool-path ./tmp-tool Infragistics.Wpf.Mcp --version 1.2.3   # add --prerelease for -alpha/-beta/-rc
+   WPF_MCP_DOTNET_DLL="$(ls ./tmp-tool/.store/infragistics.wpf.mcp/1.2.3/infragistics.wpf.mcp/1.2.3/tools/net10.0/any/wpf-mcp.dll)" npm run test:dotnet
+   curl -s "https://registry.modelcontextprotocol.io/v0/servers?search=io.github.Infragistics-Developer-Tools/wpf-mcp"   # stable versions only
+   ```
+   The smoke test runs every tool against the published package; the registry query should list the new version as `isLatest`.
 
 A prerelease version (`-alpha`/`-beta`/`-rc`) is a normal SemVer prerelease on nuget.org (`dotnet tool install` skips it unless `--prerelease` is passed); it is **not** listed in the MCP Registry (it has no dist-tag equivalent; publishing a beta there would make it the current version), so `publish-mcp-registry` is skipped for any version containing `-`.
 
@@ -215,7 +222,7 @@ Before the first workflow run, create the three `NUGET_FEED_*` repository secret
 
 Published by the `publish-mcp-registry` job of *NuGet publish*, after `publish-nuget` and only once nuget.org serves the version (the job waits for indexing). Never for prereleases — the registry has no dist-tag equivalent, so publishing a beta there would make it the current version; the job is skipped for any version containing `-`.
 
-The registry hosts metadata only. The namespace `io.github.Infragistics-Developer-Tools/*` is claimed automatically when `mcp-publisher login github-oidc` runs from this repository's Actions — nothing to configure. It verifies NuGet ownership by finding `mcp-name: io.github.Infragistics-Developer-Tools/wpf-mcp` in the package README (an HTML comment at the top of `server/README.md`); `validate:package` fails the build if the packed README lacks it. The nupkg also carries `server.json` as `.mcp/server.json`, which nuget.org and MCP clients read for configuration. By hand: `mcp-publisher login github && mcp-publisher publish` from the release commit (single binary from the [registry releases](https://github.com/modelcontextprotocol/registry/releases)).
+The registry hosts metadata only. The namespace `io.github.Infragistics-Developer-Tools/*` is claimed automatically when `mcp-publisher login github-oidc` runs from this repository's Actions — nothing to configure. It verifies NuGet ownership by finding `mcp-name: io.github.Infragistics-Developer-Tools/wpf-mcp` in the package README (an HTML comment at the top of `server/README.md`); `validate:package` fails the build if the packed README lacks it. The nupkg also carries `server.json` as `.mcp/server.json`, which nuget.org and MCP clients read for configuration. The workflow downloads a pinned `mcp-publisher` (`MCP_PUBLISHER_VERSION` in `nuget-publish.yml`); `mcp-publisher validate` checks `server.json` against the live registry without publishing. By hand: `mcp-publisher login github && mcp-publisher publish` from the release commit (single binary from the [registry releases](https://github.com/modelcontextprotocol/registry/releases)).
 
 ### npm (retired)
 
@@ -233,7 +240,7 @@ Unlike npm, a nuget.org trusted-publishing policy belongs to an **account**, not
 From then on `NuGet/login` mints a short-lived key per run. If Actions is unavailable, the manual path is:
 
 ```bash
-npm run pack:dotnet -- --version 0.1.0 && npm run validate:package -- --expected-version 0.1.0
+npm run pack:dotnet -- --version X.Y.Z && npm run validate:package -- --expected-version X.Y.Z
 dotnet nuget push nupkg/*.nupkg --api-key <scoped key from nuget.org> --source https://api.nuget.org/v3/index.json
 ```
 
@@ -255,7 +262,7 @@ Infragistics WPF NuGet packages ship two files per assembly: `InfragisticsWPF.*.
 
 ### Two runtimes, one data set
 
-`src/` (TypeScript, published to npm) and `server/` (C#, published to NuGet) implement the same nine tools over the same generated `src/data/`. Neither is derived from the other — they are kept identical by `scripts/parity-test.ts`, which CI runs on every push. The C# server uses the official `ModelContextProtocol` SDK: tools are `[McpServerTool]` methods whose parameters become the input schema (DataAnnotations → JSON Schema constraints), models are records with a source-generated `JsonSerializerContext`, data files are `Content` items copied next to the binary (`Pack="false"`, so they travel inside the tool's `tools/net8.0/any/data/` folder rather than as NuGet content files). The nupkg also carries `PackageType` `McpServer` (nuget.org renders the MCP install snippet) and `.mcp/server.json`.
+`src/` (TypeScript, not published) and `server/` (C#, published to NuGet) implement the same nine tools over the same generated `src/data/`. Neither is derived from the other — they are kept identical by `scripts/parity-test.ts`, which CI runs on every push. The C# server uses the official `ModelContextProtocol` SDK: tools are `[McpServerTool]` methods whose parameters become the input schema (DataAnnotations → JSON Schema constraints), models are records with a source-generated `JsonSerializerContext`, data files are `Content` items copied next to the binary (`Pack="false"`, so they travel inside the tool's `tools/net10.0/any/data/` folder rather than as NuGet content files). The nupkg also carries `PackageType` `McpServer` (nuget.org renders the MCP install snippet) and `.mcp/server.json`.
 
 ### Runtime data layout
 

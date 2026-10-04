@@ -8,19 +8,23 @@ Packaged as a `dotnet tool`. All Infragistics data ships inside the package; not
 
 ## Install
 
-Requires the **.NET 10 runtime** or newer.
+Requires the **.NET 10 runtime** or newer (Windows, macOS or Linux).
 
 ```bash
 dotnet tool install -g Infragistics.Wpf.Mcp
 ```
 
-The server is then available as the `wpf-mcp` command. Update later with `dotnet tool update -g Infragistics.Wpf.Mcp`; add `--prerelease` to either command for preview versions.
+The server is then available as the `wpf-mcp` command. Update later with `dotnet tool update -g Infragistics.Wpf.Mcp`, remove with `dotnet tool uninstall -g Infragistics.Wpf.Mcp`.
 
 With the .NET 10 SDK you can skip the install and let `dnx` fetch and run it on demand, like `npx`:
 
 ```bash
 dnx Infragistics.Wpf.Mcp --yes
+# or pin an exact version:
+dnx Infragistics.Wpf.Mcp@X.Y.Z --yes
 ```
+
+**Check that it starts:** run `wpf-mcp` in a terminal. It prints `Infragistics WPF MCP server X.Y.Z ready (data: Infragistics 26.1.21, built YYYY-MM-DD)` to stderr and waits for an MCP client on stdin (`Ctrl+C` to stop). To try the tools without an AI client: `npx @modelcontextprotocol/inspector wpf-mcp`.
 
 ## Configure your MCP client
 
@@ -88,7 +92,7 @@ All tools are annotated `readOnlyHint: true`, `openWorldHint: false` — none of
 
 ## Troubleshooting
 
-- **Which Infragistics version is the data from?** The server prints it to stderr on startup: `Infragistics WPF MCP server 1.2.3 ready (data: Infragistics 26.1.21, built 2026-09-14)`.
+- **Which Infragistics version is the data from?** The server prints it to stderr on startup: `Infragistics WPF MCP server X.Y.Z ready (data: Infragistics 26.1.21, built YYYY-MM-DD)`.
 - **Log every tool call** — add `"args": ["--debug"]` to the client configuration. Each call's input, output and timing goes to `wpf-mcp.log` in your system temp folder (override with the `WPF_MCP_LOG` environment variable); the exact path is printed to stderr on startup.
 - **`wpf-mcp` is not found** after `dotnet tool install -g` — the global tools folder (`%USERPROFILE%\.dotnet\tools` on Windows, `~/.dotnet/tools` elsewhere) is not on the `PATH` of the process that launches the client. Restart the client, or use the full path as `command`.
 - **An answer looks wrong or a control seems missing** — this is usually stale data in Infragistics' own NuGet package (summaries, base types) rather than a bug in this server. Cross-check against the pinned version above before assuming the MCP itself is at fault.

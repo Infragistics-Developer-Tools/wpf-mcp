@@ -20,7 +20,7 @@
     <Company>Infragistics</Company>
     <Product>Infragistics MCP Server for WPF</Product>
     <AssemblyTitle>Infragistics MCP Server for WPF</AssemblyTitle>
-    <Description>MCP server for Infragistics NetAdvantage for WPF — component registry and API reference</Description>
+    <Description>MCP server for Infragistics NetAdvantage for WPF — component registry, API reference, docs search and theming</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/Infragistics-Developer-Tools/wpf-mcp</PackageProjectUrl>
     <RepositoryUrl>https://github.com/Infragistics-Developer-Tools/wpf-mcp</RepositoryUrl>
