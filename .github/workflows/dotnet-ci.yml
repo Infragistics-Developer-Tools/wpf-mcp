@@ -1,0 +1,36 @@
+name: .NET CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dotnet-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - uses: ./.github/actions/build-data
+        with:
+          nuget-feed-url: ${{ secrets.NUGET_FEED_URL }}
+          nuget-feed-username: ${{ secrets.NUGET_FEED_USERNAME }}
+          nuget-feed-password: ${{ secrets.NUGET_FEED_PASSWORD }}
+
+      - name: Validate package contents
+        run: npm run validate:package
