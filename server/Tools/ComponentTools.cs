@@ -236,8 +236,8 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
         [Description(""".NET project name. Defaults to "MyWpfApp".""")]
         [MinLength(1), MaxLength(128)]
         string projectName = "MyWpfApp",
-        [Description("""Target framework version. Defaults to "net8.0".""")]
-        TargetFramework framework = TargetFramework.net8_0)
+        [Description("""Target framework version. Defaults to "net10.0".""")]
+        TargetFramework framework = TargetFramework.net10_0)
     {
         var timer = Stopwatch.StartNew();
         var input = new { components, projectName, framework = framework.Wire() };

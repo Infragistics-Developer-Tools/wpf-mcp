@@ -32,14 +32,11 @@ runs:
         node-version: ${{ inputs.node-version }}
         cache: npm
 
-    # 10.0.x builds everything (global.json pins it) and is what the server targets;
-    # 8.0.x only supplies the runtime the build-time type extractor (net8.0-windows)
-    # runs on.
+    # 10.0.x builds everything (global.json pins it): the server (net10.0) and the
+    # build-time type extractor (net10.0-windows).
     - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
       with:
-        dotnet-version: |
-          8.0.x
-          10.0.x
+        dotnet-version: 10.0.x
 
     # nuget/nuget.config is gitignored; it is written here only when the feed
     # secrets are present (they are not on pull requests from forks, which then

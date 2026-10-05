@@ -5,7 +5,7 @@ public static class ServerInstructions
 {
     public const string Text = """
 
-              Infragistics NetAdvantage for WPF MCP server — component registry, API reference, documentation search, and project scaffolding.
+              Infragistics Ultimate UI for WPF MCP server — component registry, API reference, documentation search, and project scaffolding.
 
               Canonical workflow — these tools form one chain, follow it in order and reuse the exact names between steps, don't skip ahead to writing XAML:
                 1. Resolve the component name: list_wpf_components (Xam* control you can name or want to browse) or search_wpf_api (only know a feature/keyword, e.g. "filter", "export").

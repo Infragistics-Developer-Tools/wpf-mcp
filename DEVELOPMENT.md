@@ -7,9 +7,8 @@ The C# server in `server/` is the only published runtime. The TypeScript server 
 ## Prerequisites
 
 - **Node.js ≥ 20** — the data pipeline and test scripts are TypeScript
-- **.NET 10 SDK** — the C# server targets `net10.0`; `global.json` pins the SDK to 10.0.x (no previews)
-- **.NET 8 runtime (WindowsDesktop)** — only for the build-time type extractor, which still targets `net8.0-windows`; it is never shipped
-- **Windows** — the type extractor loads the Infragistics WPF assemblies with real reflection, which needs the WindowsDesktop runtime. Everything else in the pipeline is portable, but you cannot produce `src/data/` on macOS/Linux
+- **.NET 10 SDK** — the C# server targets `net10.0` and the build-time type extractor `net10.0-windows`; `global.json` pins the SDK to 10.0.x (no previews)
+- **Windows** — the type extractor (`UseWPF`) loads the Infragistics WPF assemblies with real reflection, which needs the WindowsDesktop runtime. Everything else in the pipeline is portable, but you cannot produce `src/data/` on macOS/Linux
 - Network access to **nuget.org** (Infragistics Trial packages) and **github.com** (three submodules)
 
 ## First build
