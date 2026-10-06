@@ -1,3 +1,18 @@
+# [0.1.0-beta.0](https://github.com/Infragistics-Developer-Tools/wpf-mcp/compare/0.0.1-alpha.5...0.1.0-beta.0) (2026-10-06)
+
+
+### Features
+* **server:** first beta of the `Infragistics.Wpf.Mcp` dotnet tool — nine read-only MCP tools over Infragistics Ultimate UI for WPF 26.1.21: component registry, API reference (6,907 types), docs search (2,678 topics), project scaffolding and theming
+
+### Bug Fixes
+* **server:** starts even when the MCP client's working directory contains an unrelated or malformed `appsettings.json`
+* **server:** `get_wpf_project_scaffold` rejects a project name with a trailing newline instead of emitting a broken `dotnet new` command
+* **ci:** NuGet publish runs when a release is published, so a release saved as a draft first still publishes
+* product renamed to Infragistics Ultimate UI for WPF; build-time type extractor moved to .NET 10
+
+### Documentation
+* install instructions state the .NET 10 SDK requirement and that the beta needs `--prerelease` or an exact version
+
 ## [0.0.1-alpha.5](https://github.com/Infragistics-Developer-Tools/wpf-mcp/compare/0.0.1-alpha.4...0.0.1-alpha.5) (2026-09-30)
 
 

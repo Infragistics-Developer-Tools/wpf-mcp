@@ -220,7 +220,8 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
 
     // ── get_wpf_project_scaffold ─────────────────────────────────────────────
 
-    [GeneratedRegex("^[a-zA-Z][a-zA-Z0-9._-]*$")]
+    // \z, not $: in .NET `$` also matches before a trailing "\n", which would let "MyApp\n" through.
+    [GeneratedRegex(@"^[a-zA-Z][a-zA-Z0-9._-]*\z")]
     private static partial Regex ProjectNameRegex();
 
     [McpServerTool(Name = "get_wpf_project_scaffold", ReadOnly = true, Idempotent = true, OpenWorld = false)]

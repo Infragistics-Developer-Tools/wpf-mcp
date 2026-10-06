@@ -1,7 +1,9 @@
 name: NuGet publish
 on:
   release:
-    types: [created]
+    # `published`, not `created`: GitHub never fires `created` for a release saved as a
+    # draft, so a draft published later would otherwise not publish anything.
+    types: [published]
 
 # Nothing by default; each job asks for exactly what it needs.
 permissions: {}

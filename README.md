@@ -2,7 +2,7 @@
 
 MCP server for **Infragistics Ultimate UI for WPF** — component registry, XAML namespace lookup, full API reference with property types and enum values, keyword search across 6,900+ types, and named-theme setup with palette re-coloring.
 
-Distributed as a NuGet `dotnet tool`, [`Infragistics.Wpf.Mcp`](https://www.nuget.org/packages/Infragistics.Wpf.Mcp), and listed in the [MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.Infragistics-Developer-Tools/wpf-mcp`.
+Distributed as a NuGet `dotnet tool`, [`Infragistics.Wpf.Mcp`](https://www.nuget.org/packages/Infragistics.Wpf.Mcp) — currently in **beta** (`0.1.0-beta.0`). From the first stable release it will also be listed in the [MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.Infragistics-Developer-Tools/wpf-mcp`.
 
 ## Tools
 
@@ -22,28 +22,30 @@ All tools are read-only (`readOnlyHint: true`, `openWorldHint: false`) — none 
 
 ## Installation
 
-Requires the **.NET 10 runtime** or newer (Windows, macOS or Linux); nothing else. All Infragistics data ships inside the package and nothing is downloaded at runtime.
+Requires the **.NET 10 SDK** or newer (Windows, macOS or Linux) — `dotnet tool install` and `dnx` are SDK commands, so the .NET 10 runtime alone is not enough. All Infragistics data ships inside the package and nothing is downloaded at runtime.
+
+> **Beta:** the package is a prerelease, so every command below needs `--prerelease` or an exact `@0.1.0-beta.0` version — without one, NuGet reports the package as "not found".
 
 **Option A: global install** (gives you a `wpf-mcp` command on `PATH`)
 
 ```bash
-dotnet tool install -g Infragistics.Wpf.Mcp
+dotnet tool install -g Infragistics.Wpf.Mcp --prerelease
 ```
 
-Update with `dotnet tool update -g Infragistics.Wpf.Mcp`, remove with `dotnet tool uninstall -g Infragistics.Wpf.Mcp`.
+Update with `dotnet tool update -g Infragistics.Wpf.Mcp --prerelease`, remove with `dotnet tool uninstall -g Infragistics.Wpf.Mcp`.
 
-**Option B: run on demand with `dnx`** (needs the .NET 10 **SDK**; downloads and caches the package on first use, nothing to install or update by hand)
+**Option B: run on demand with `dnx`** (downloads and caches the package on first use, nothing to install or update by hand)
 
 ```bash
-dnx Infragistics.Wpf.Mcp --yes
-# or pin an exact version:
-dnx Infragistics.Wpf.Mcp@X.Y.Z --yes
+dnx Infragistics.Wpf.Mcp@0.1.0-beta.0 --yes
+# or always the newest prerelease:
+dnx Infragistics.Wpf.Mcp --prerelease --yes
 ```
 
 **Check that it starts.** Run `wpf-mcp` (or the `dnx` command above) in a terminal. It prints a line like this to stderr and then waits for an MCP client on stdin:
 
 ```
-Infragistics WPF MCP server X.Y.Z ready (data: Infragistics 26.1.21, built YYYY-MM-DD)
+Infragistics WPF MCP server 0.1.0-beta.0 ready (data: Infragistics 26.1.21, built <date>)
 ```
 
 Press `Ctrl+C` to stop it. To try the tools without an AI client, open it in the MCP Inspector: `npx @modelcontextprotocol/inspector wpf-mcp`.
@@ -94,13 +96,15 @@ Press `Ctrl+C` to stop it. To try the tools without an AI client, open it in the
 claude mcp add infragistics-wpf -- wpf-mcp
 ```
 
-To use `dnx` instead of a global install, set `"command": "dnx"` and `"args": ["Infragistics.Wpf.Mcp", "--yes"]` (Claude Code: `claude mcp add infragistics-wpf -- dnx Infragistics.Wpf.Mcp --yes`). Add `"--debug"` to `args` for any client to log every tool call/response to `wpf-mcp.log` in your system temp folder (override with the `WPF_MCP_LOG` environment variable) — see [Troubleshooting](#troubleshooting).
+To use `dnx` instead of a global install, set `"command": "dnx"` and `"args": ["Infragistics.Wpf.Mcp@0.1.0-beta.0", "--yes"]` (Claude Code: `claude mcp add infragistics-wpf -- dnx Infragistics.Wpf.Mcp@0.1.0-beta.0 --yes`). Add `"--debug"` to `args` for any client to log every tool call/response to `wpf-mcp.log` in your system temp folder (override with the `WPF_MCP_LOG` environment variable) — see [Troubleshooting](#troubleshooting).
 
 To run from a source checkout instead, build it first (see [DEVELOPMENT.md](DEVELOPMENT.md)) and point `command`/`args` at `dotnet` and `path/to/wpf-mcp/server/bin/Debug/net10.0/wpf-mcp.dll`.
 
 ## Troubleshooting
 
-- **Which Infragistics version is the data from?** The server prints it to stderr on startup: `Infragistics WPF MCP server X.Y.Z ready (data: Infragistics 26.1.21, built YYYY-MM-DD)`. Every release regenerates the data from the version pinned in [`nuget/WpfDocs.csproj`](nuget/WpfDocs.csproj).
+- **`infragistics.wpf.mcp is not found in NuGet feeds`** — the command is missing `--prerelease` (or an exact `@0.1.0-beta.0` version); see [Installation](#installation).
+- **`Settings file 'DotnetToolSettings.xml' was not found in the package`** — the active .NET SDK is older than 10 (check `dotnet --version`; a `global.json` in the current folder can pin an older one). Install the .NET 10 SDK.
+- **Which Infragistics version is the data from?** The server prints it to stderr on startup: `Infragistics WPF MCP server 0.1.0-beta.0 ready (data: Infragistics 26.1.21, built <date>)`. Every release regenerates the data from the version pinned in [`nuget/WpfDocs.csproj`](nuget/WpfDocs.csproj).
 - **Run the server with `--debug`** (add it to your MCP client config's `args`, see above) to log every tool call's input/output/timing to `wpf-mcp.log` in your system temp folder — useful for reproducing an agent's exact tool-calling sequence after the fact. The exact path is printed to stderr on startup, and can be overridden with the `WPF_MCP_LOG` environment variable.
 - **`wpf-mcp` is not found** after `dotnet tool install -g` — the global tools folder (`%USERPROFILE%\.dotnet\tools` on Windows, `~/.dotnet/tools` elsewhere) is not on the `PATH` of the process that launches the client. Restart the client, or use the full path as `command`.
 - **A tool call succeeded but the answer looks wrong or a control seems missing** — this is usually stale/outdated data from Infragistics' own NuGet package (summaries, base types) rather than a bug in this server. Cross-check against the pinned version above before assuming the MCP itself is at fault.
