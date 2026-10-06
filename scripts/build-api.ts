@@ -123,7 +123,7 @@ function parseAllMembers(xml: string): RawMember[] {
 }
 
 // ── File discovery ─────────────────────────────────────────────────────────────
-const TFM_PREF = ['net8.0-windows7.0', 'net10.0-windows7.0', 'net9.0-windows7.0', 'net40'];
+const TFM_PREF = ['net10.0-windows7.0', 'net9.0-windows7.0', 'net8.0-windows7.0', 'net40'];
 
 interface XmlSource { xmlPath: string; packageId: string }
 

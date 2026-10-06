@@ -1,0 +1,227 @@
+name: NuGet publish
+on:
+  release:
+    types: [created]
+
+# Nothing by default; each job asks for exactly what it needs.
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref_name }}
+
+env:
+  VERSION: ${{ github.ref_name }}
+
+jobs:
+  # Generates the data set from scratch (nothing under src/data is committed), builds
+  # both servers, tests them, packs the (still unsigned) nupkg stamped with the tag and
+  # validates its contents. Windows only because of the type extractor. No publishing
+  # rights, no Azure access — only the finished nupkg leaves this job.
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - run: echo "Releasing ${VERSION}"
+
+      - uses: ./.github/actions/build-data
+        with:
+          nuget-feed-url: ${{ secrets.NUGET_FEED_URL }}
+          nuget-feed-username: ${{ secrets.NUGET_FEED_USERNAME }}
+          nuget-feed-password: ${{ secrets.NUGET_FEED_PASSWORD }}
+          package-version: ${{ env.VERSION }}
+
+      - name: Validate package contents
+        run: npm run validate:package -- --expected-version "$VERSION"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: unsigned-nupkg
+          path: "nupkg/*.nupkg"
+          if-no-files-found: error
+          retention-days: 1
+
+  # Holds Azure Key Vault access, but no NuGet publishing rights and no source build.
+  # A single `sign code` call on the nupkg signs inside-out: first the files inside it
+  # that eng/sign-filelist.txt selects — only wpf-mcp.dll, the one assembly Infragistics
+  # authors; the third-party dependency DLLs a dotnet tool carries (ModelContextProtocol,
+  # Microsoft.Extensions.*, ...) are never signed with this certificate — then the nupkg
+  # itself, which is always signed regardless of the file list.
+  sign:
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 20
+    environment: nuget-org-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Sparse: the sign tool pin, the file list, the validation scripts and the pinned
+      # certificate fingerprint — nothing that could be built.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .config/dotnet-tools.json
+            .github/scripts
+            eng
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: unsigned-nupkg
+          path: nupkg
+
+      - name: Restore .NET local tools
+        run: dotnet tool restore
+
+      - name: Authenticate to Azure
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
+        with:
+          client-id: ${{ secrets.AZURE_KEYVAULT_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_KEYVAULT_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_KEYVAULT_SUBSCRIPTION_ID }}
+
+      - name: Sign wpf-mcp.dll and the NuGet package
+        shell: pwsh
+        run: >
+          dotnet tool run sign code azure-key-vault "*.nupkg"
+          --base-directory "${{ github.workspace }}/nupkg"
+          --file-list "${{ github.workspace }}/eng/sign-filelist.txt"
+          --azure-key-vault-url "${{ secrets.AZURE_KEYVAULT_URL }}"
+          --azure-key-vault-certificate "${{ secrets.AZURE_KEYVAULT_CERTIFICATE }}"
+          --azure-credential-type azure-cli
+          --verbosity Warning
+
+      - name: Validate packaged assembly signature
+        shell: pwsh
+        run: >
+          .github/scripts/Assert-PackageSignatures.ps1
+          -PackagePath (Get-ChildItem "${{ github.workspace }}/nupkg/*.nupkg").FullName
+          -AssemblyPath "tools/net10.0/any/wpf-mcp.dll"
+          -ExpectedCertificateSha256Path "eng/IG.authenticode-certificates.sha256"
+
+      - name: Validate NuGet package signature
+        shell: pwsh
+        run: >
+          .github/scripts/Assert-NuGetSignature.ps1
+          -PackagePath (Get-ChildItem "${{ github.workspace }}/nupkg/*.nupkg").FullName
+          -ExpectedCertificateSha256Path "eng/IG.authenticode-certificates.sha256"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nupkg
+          path: "nupkg/*.nupkg"
+          if-no-files-found: error
+          retention-days: 5
+
+  # Publishes exactly the signed nupkg that was validated above. Same shape as
+  # IgniteUI/igniteui-blazor's release workflow: gated behind the nuget-org-publish
+  # environment, and nuget.org trusted publishing (OIDC) instead of a stored API key —
+  # NuGet/login exchanges the workflow's OIDC token for a short-lived key under the
+  # nuget.org account named by INFRAGISTICS_NUGET_ORG_USER (the account that owns the
+  # trust policy and the Infragistics.* prefix). No --skip-duplicate: nuget.org never
+  # accepts a version twice, and a rerun should fail loudly rather than pretend it shipped.
+  publish-nuget:
+    needs: sign
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: nuget-org-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Sparse: this job only needs the signature-verification script and the pinned
+      # certificate fingerprint, not the rest of the source tree.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .github/scripts
+            eng/IG.authenticode-certificates.sha256
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: nupkg
+          path: nupkg
+
+      # Re-verifies the signature on this fresh runner, immediately before push, rather
+      # than trusting that the artifact download carried over exactly what was signed.
+      - name: Validate NuGet package signature
+        shell: pwsh
+        run: >
+          .github/scripts/Assert-NuGetSignature.ps1
+          -PackagePath (Get-ChildItem "${{ github.workspace }}/nupkg/*.nupkg").FullName
+          -ExpectedCertificateSha256Path "eng/IG.authenticode-certificates.sha256"
+
+      - name: NuGet login (OIDC Trusted Publishing)
+        id: nuget-login
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
+        with:
+          user: ${{ secrets.INFRAGISTICS_NUGET_ORG_USER }}
+
+      - name: Publish to NuGet.org
+        env:
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+        run: dotnet nuget push nupkg/*.nupkg --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+
+  # Lists the version in the MCP Registry (registry.modelcontextprotocol.io). The registry
+  # hosts metadata only: mcp-publisher checks that server.json's NuGet package exists on
+  # nuget.org and that its README carries `mcp-name: <server name>` (validate:package
+  # already checked the marker). Skipped for prereleases — the registry has no dist-tags,
+  # so publishing an alpha/beta/rc would make it the current version.
+  publish-mcp-registry:
+    needs: publish-nuget
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Only for server.json, which mcp-publisher reads from the working directory.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: server.json
+          sparse-checkout-cone-mode: false
+
+      # A fresh push can take minutes to become visible in nuget.org's flat container,
+      # and mcp-publisher fails if it cannot find the package there yet.
+      - name: Wait for nuget.org indexing
+        run: |
+          ID=$(jq -r '.packages[] | select(.registryType == "nuget") | .identifier | ascii_downcase' server.json)
+          URL="https://api.nuget.org/v3-flatcontainer/${ID}/${VERSION,,}/${ID}.nuspec"
+          for i in $(seq 1 60); do
+            if curl -fsSL -o /dev/null "$URL"; then echo "indexed: $URL"; exit 0; fi
+            echo "not indexed yet ($i/60), waiting 20s…"; sleep 20
+          done
+          echo "::error::nuget.org still does not serve ${ID} ${VERSION}"; exit 1
+
+      - name: Download MCP Publisher
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar -xz -f - mcp-publisher
+          chmod +x mcp-publisher
+
+      - name: Publish to MCP Registry
+        run: |
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish

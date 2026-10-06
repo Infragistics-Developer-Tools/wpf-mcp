@@ -41,7 +41,7 @@ if (!Directory.Exists(packagesDir)) {
 // ── Discover DLL files ────────────────────────────────────────────────────────
 
 var preferredTfms = new[] {
-    "net8.0-windows7.0", "net10.0-windows7.0", "net9.0-windows7.0",
+    "net10.0-windows7.0", "net9.0-windows7.0", "net8.0-windows7.0",
     "net8.0-windows", "net7.0-windows7.0", "net6.0-windows7.0", "net40"
 };
 
