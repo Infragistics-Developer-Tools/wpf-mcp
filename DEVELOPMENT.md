@@ -187,10 +187,11 @@ A prerelease version (`-alpha`/`-beta`/`-rc`) is a normal SemVer prerelease on n
 | Workflow | Trigger | Runner | Does |
 |---|---|---|---|
 | `nodejs.yml` — *Node.js CI* | push / PR to `main` | `typecheck`: ubuntu · `build-and-test`: windows, Node 22 + 24 | `npm ci` → `typecheck` → `build:all` → `test` → `build:dotnet` → `test:dotnet` → `test:parity` → `pack:dotnet` → `validate:package` → prints package sizes |
+| `dotnet-ci.yml` — *.NET CI* | push / PR to `main` | windows | `npm ci` → `typecheck` → `build:all` → `test` → `build:dotnet` → `test:dotnet` → `test:parity` → `pack:dotnet` → `validate:package` |
 | `nuget-publish.yml` — *NuGet publish* | GitHub Release created | `build`, `sign`: windows · `publish-nuget`, `publish-mcp-registry`: ubuntu | `build`: same as CI (nupkg stamped with the tag) + `validate:package --expected-version <tag>` → unsigned nupkg artifact. `sign` (environment `nuget-org-publish`): Azure login + one `sign code` call on the `.nupkg`, which Authenticode-signs `wpf-mcp.dll` inside it (selected by `eng/sign-filelist.txt`) and then the package itself → both signatures validated → nupkg artifact. `publish-nuget` (same environment): `NuGet/login` + `dotnet nuget push`. `publish-mcp-registry` (skipped for prereleases): wait for nuget.org to serve the version, `mcp-publisher publish` |
 | `bump-infragistics.yml` — *Bump Infragistics data sources* | manual | ubuntu | Rewrites csproj versions and/or `docs:update`, opens a PR |
 
-Both Windows *build* jobs go through the composite action `.github/actions/build-data`, so CI and the release can't drift. Every third-party action in the workflows is pinned to a full commit SHA, with the release it corresponds to in a trailing comment (`@<sha> # v7.0.1`); to update one, resolve the new release tag to its commit and replace both. It takes the private-feed credentials as inputs, which the workflows pass from these repository secrets (*Settings → Secrets and variables → Actions*):
+The Windows *build* jobs go through the composite action `.github/actions/build-data`, so CI and the release can't drift. Every third-party action in the workflows is pinned to a full commit SHA, with the release it corresponds to in a trailing comment (`@<sha> # v7.0.1`); to update one, resolve the new release tag to its commit and replace both. It takes the private-feed credentials as inputs, which the workflows pass from these repository secrets (*Settings → Secrets and variables → Actions*):
 
 | Secret | Value |
 |---|---|
