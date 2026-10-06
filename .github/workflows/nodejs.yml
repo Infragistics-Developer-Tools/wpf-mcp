@@ -25,7 +25,7 @@ jobs:
       - run: npm run typecheck
 
   # The real thing: full data generation + both servers + smoke/parity tests + package
-  # validation. windows-latest because scripts/type-extractor targets net8.0-windows
+  # validation. windows-latest because scripts/type-extractor targets net10.0-windows
   # and loads WPF assemblies; nothing else in the pipeline needs Windows.
   build-and-test:
     runs-on: windows-latest

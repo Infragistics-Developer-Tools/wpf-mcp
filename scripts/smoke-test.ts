@@ -104,7 +104,7 @@ async function main(): Promise<void> {
     check('keyword search returns ranked results', !r.isError && textOf(r).includes('# WPF API Search'));
 
     console.log('get_wpf_project_scaffold');
-    r = await call('get_wpf_project_scaffold', { components: ['XamDataGrid', 'XamCategoryChart'], projectName: 'SmokeApp', framework: 'net8.0' });
+    r = await call('get_wpf_project_scaffold', { components: ['XamDataGrid', 'XamCategoryChart'], projectName: 'SmokeApp', framework: 'net10.0' });
     text = textOf(r);
     check('scaffold has dotnet commands and xmlns', !r.isError && text.includes('dotnet new') && text.includes('dotnet add') && text.includes('xmlns:'));
 

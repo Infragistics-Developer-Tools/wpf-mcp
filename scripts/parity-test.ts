@@ -49,7 +49,7 @@ const CALLS: Call[] = [
   { tool: 'search_wpf_api', args: { query: 'zzzqqq' } },
   { tool: 'search_wpf_api', args: { query: 'zzz qqq' } },
 
-  { tool: 'get_wpf_project_scaffold', args: { components: ['XamDataGrid', 'XamCategoryChart'], projectName: 'SmokeApp', framework: 'net8.0' } },
+  { tool: 'get_wpf_project_scaffold', args: { components: ['XamDataGrid', 'XamCategoryChart'], projectName: 'SmokeApp', framework: 'net10.0' } },
   { tool: 'get_wpf_project_scaffold', args: { components: ['xamdatagrid', 'XamDataGrid', 'Nope', 'Grid'], framework: 'net6.0' } },
   { tool: 'get_wpf_project_scaffold', args: { components: ['Nope'] } },
   { tool: 'get_wpf_project_scaffold', args: { components: ['XamDataGrid'], projectName: '1bad' } },
