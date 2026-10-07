@@ -10,7 +10,8 @@ on:
     branches: [ main ]
 
 jobs:
-  # Fast feedback that needs no data: tsc never touches src/data.
+  # Fast feedback that needs no data: tsc never touches src/data. The full build
+  # (data, both servers, smoke/parity tests, pack) runs in dotnet-ci.yml.
   typecheck:
     runs-on: ubuntu-latest
     steps:
@@ -23,31 +24,3 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-
-  # The real thing: full data generation + both servers + smoke/parity tests + package
-  # validation. windows-latest because scripts/type-extractor targets net10.0-windows
-  # and loads WPF assemblies; nothing else in the pipeline needs Windows.
-  build-and-test:
-    runs-on: windows-latest
-    strategy:
-      matrix:
-        node-version: [22, 24]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          submodules: recursive
-          persist-credentials: false
-      - uses: ./.github/actions/build-data
-        with:
-          node-version: ${{ matrix.node-version }}
-          nuget-feed-url: ${{ secrets.NUGET_FEED_URL }}
-          nuget-feed-username: ${{ secrets.NUGET_FEED_USERNAME }}
-          nuget-feed-password: ${{ secrets.NUGET_FEED_PASSWORD }}
-      - name: Validate package contents
-        shell: bash
-        run: npm run validate:package
-      - name: Report package sizes
-        shell: bash
-        run: |
-          npm pack --dry-run 2>&1 | grep -E "package size|unpacked size|total files"
-          ls -l nupkg/*.nupkg

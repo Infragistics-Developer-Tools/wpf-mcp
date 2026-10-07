@@ -9,11 +9,16 @@ on:
 permissions:
   contents: read
 
+# A new push to a PR cancels its stale run; runs on main always finish so every
+# merged commit gets a result.
 concurrency:
   group: dotnet-ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Full data generation + both servers + smoke/parity tests + package validation.
+  # windows-latest because scripts/type-extractor targets net10.0-windows and loads
+  # WPF assemblies; nothing else in the pipeline needs Windows.
   build-and-test:
     runs-on: windows-latest
     timeout-minutes: 30
@@ -34,3 +39,6 @@ jobs:
 
       - name: Validate package contents
         run: npm run validate:package
+
+      - name: Report package size
+        run: ls -l nupkg/*.nupkg

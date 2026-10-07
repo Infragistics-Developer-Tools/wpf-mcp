@@ -186,8 +186,8 @@ A prerelease version (`-alpha`/`-beta`/`-rc`) is a normal SemVer prerelease on n
 
 | Workflow | Trigger | Runner | Does |
 |---|---|---|---|
-| `nodejs.yml` — *Node.js CI* | push / PR to `main` | `typecheck`: ubuntu · `build-and-test`: windows, Node 22 + 24 | `npm ci` → `typecheck` → `build:all` → `test` → `build:dotnet` → `test:dotnet` → `test:parity` → `pack:dotnet` → `validate:package` → prints package sizes |
-| `dotnet-ci.yml` — *.NET CI* | push / PR to `main` | windows | `npm ci` → `typecheck` → `build:all` → `test` → `build:dotnet` → `test:dotnet` → `test:parity` → `pack:dotnet` → `validate:package` |
+| `nodejs.yml` — *Node.js CI* | push / PR to `main` | `typecheck`: ubuntu | `npm ci` → `typecheck` (fast feedback, needs no data) |
+| `dotnet-ci.yml` — *.NET CI* | push / PR to `main` | `build-and-test`: windows, Node 24, 30 min timeout | `npm ci` → `typecheck` → `build:all` → `test` → `build:dotnet` → `test:dotnet` → `test:parity` → `pack:dotnet` → `validate:package` → prints nupkg size. A new push to a PR cancels its in-progress run; runs on `main` always finish |
 | `nuget-publish.yml` — *NuGet publish* | GitHub Release created | `build`, `sign`: windows · `publish-nuget`, `publish-mcp-registry`: ubuntu | `build`: same as CI (nupkg stamped with the tag) + `validate:package --expected-version <tag>` → unsigned nupkg artifact. `sign` (environment `nuget-org-publish`): Azure login + one `sign code` call on the `.nupkg`, which Authenticode-signs `wpf-mcp.dll` inside it (selected by `eng/sign-filelist.txt`) and then the package itself → both signatures validated → nupkg artifact. `publish-nuget` (same environment): `NuGet/login` + `dotnet nuget push`. `publish-mcp-registry` (skipped for prereleases): wait for nuget.org to serve the version, `mcp-publisher publish` |
 | `bump-infragistics.yml` — *Bump Infragistics data sources* | manual | ubuntu | Rewrites csproj versions and/or `docs:update`, opens a PR |
 
