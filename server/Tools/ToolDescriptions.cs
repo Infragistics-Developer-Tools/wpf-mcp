@@ -22,7 +22,9 @@ public static class ToolDescriptions
     public const string GetWpfApiReference = """
         Get full API documentation for an Infragistics WPF type: xmlns declaration, NuGet package, type summary, and all members (properties, methods, events) with descriptions.
 
-        Use after list_wpf_components (or search_wpf_api, if the exact type name isn't known yet) to resolve the component name. Also use to check whether a specific property or event exists on a known type — it returns the complete member list, including members inherited from Infragistics base classes.
+        Use after list_wpf_components (or search_wpf_api, if the exact type name isn't known yet) to resolve the component name. Also use to check whether a specific property or event exists on a known type — it returns the complete member list, including members inherited from Infragistics base classes (grouped under "inherited from `Base`" headings).
+
+        Large types (mostly charts, whose members are largely inherited) are compacted to stay under ~25K characters: inherited members are listed by name only, and for the few types that declare hundreds of members themselves, direct members are too. The response then says so in an "ℹ️ Compacted" line. To get full details (type, enum values, summary) for specific members, pass member: a case-insensitive name substring, combinable with kind — e.g. get_wpf_api_reference("XamCategoryChart", member: "YAxis") returns every YAxis* member, inherited ones included. When you already know which members you need, pass member up front.
 
         If a type's own member list is unexpectedly sparse, the response names its base type — call get_wpf_api_reference again on that base type to see the rest of the inherited surface.
 

@@ -21,7 +21,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT  = join(__dirname, '..');
 const ENTRY = join(ROOT, 'dist', 'index.js');
 const DOTNET_DLL = process.env.WPF_MCP_DOTNET_DLL ?? join(ROOT, 'server', 'bin', 'Debug', 'net10.0', 'wpf-mcp.dll');
-const TARGET = process.argv.includes('--dotnet')
+const IS_DOTNET = process.argv.includes('--dotnet');
+const TARGET = IS_DOTNET
   ? { entry: DOTNET_DLL, command: 'dotnet', args: [DOTNET_DLL], hint: 'dotnet build server/' }
   : { entry: ENTRY, command: process.execPath, args: [ENTRY], hint: 'npm run build' };
 
@@ -93,7 +94,22 @@ async function main(): Promise<void> {
     text = textOf(r);
     check('XamDataGrid resolves with xmlns and NuGet', !r.isError && text.startsWith('# XamDataGrid') && text.includes('xmlns:igDP=') && text.includes('Infragistics.WPF'));
     check('inherited members are grouped by base type', text.includes('(inherited from `DataPresenterBase`)'), 'no "(inherited from `DataPresenterBase`)" section — enrichWithInheritance did not run');
-    check('property types and enum values are attached', /`[A-Za-z.]+` — values: `/.test(text), 'no "`Type` — values: `…`" member line — type-info.json was not merged');
+    // kind: properties — small enough to render every member (inherited ones included) in full.
+    r = await call('get_wpf_api_reference', { component: 'XamDataGrid', kind: 'properties' });
+    check('property types and enum values are attached', /`[A-Za-z.]+` — values: `/.test(textOf(r)), 'no "`Type` — values: `…`" member line — type-info.json was not merged');
+    if (IS_DOTNET) {
+      // C# only: the TS server has no size guard / member filter.
+      r = await call('get_wpf_api_reference', { component: 'XamCategoryChart' });
+      text = textOf(r);
+      check('large type is compacted under 25K chars', !r.isError && text.length <= 25_000 && text.includes('_ℹ️ Compacted:') && text.includes('(inherited from `XamXYChart`)\n`'), `${text.length} chars`);
+      r = await call('get_wpf_api_reference', { component: 'XamCategoryChart', member: 'yaxis' });
+      text = textOf(r);
+      check('member filter returns inherited members in full detail',
+        !r.isError && !text.includes('Compacted') && text.includes('(inherited from `XamXYChart`)') && text.includes('- **YAxisLabelLocation** `YAxisLabelLocation` — values: `') && !text.includes('**XAxisLabel**'),
+        text.slice(0, 300));
+      r = await call('get_wpf_api_reference', { component: 'XamCategoryChart', member: 'NoSuchMemberXyz' });
+      check('member filter with no match explains instead of erroring', !r.isError && textOf(r).includes('No members whose name contains "NoSuchMemberXyz"'));
+    }
     r = await call('get_wpf_api_reference', { component: 'xamdatagrid', kind: 'events' });
     check('case-insensitive lookup + kind filter', !r.isError && textOf(r).includes('# XamDataGrid'));
     r = await call('get_wpf_api_reference', { component: 'NoSuchTypeXyz', kind: 'all' });

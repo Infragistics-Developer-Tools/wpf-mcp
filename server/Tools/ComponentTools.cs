@@ -101,6 +101,46 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
         return line;
     }
 
+    // Above this size the full rendering gets saved to a file by clients like Claude Code instead
+    // of coming back inline (~28K was seen inline, 56K was not). Measured over all 6,907 types:
+    // ~210 exceed it, almost all because of members copied down from base classes.
+    internal const int MaxApiReferenceChars = 25_000;
+
+    // Compact rendering: one line of names per section; details come from a `member` call.
+    private static string FormatMemberNames(IEnumerable<ApiMemberEntry> items) =>
+        string.Join(", ", items.Select(m => $"`{m.Name}`"));
+
+    private static List<string> RenderMemberSections(
+        (ApiMemberEntry m, string kind)[] members, bool compactInherited, bool compactDirect)
+    {
+        var output = new List<string>();
+        foreach (var (label, kindKey) in new[] { ("Properties", "property"), ("Events", "event"), ("Methods", "method") })
+        {
+            var items = members.Where(m => m.kind == kindKey).Select(m => m.m).ToArray();
+            if (items.Length == 0) continue;
+
+            // Direct members first, then one section per ancestor in first-seen order.
+            var direct = items.Where(m => string.IsNullOrEmpty(m.DeclaredOn)).ToArray();
+            var inherited = items.Where(m => !string.IsNullOrEmpty(m.DeclaredOn)).GroupBy(m => m.DeclaredOn!);
+
+            if (direct.Length > 0)
+            {
+                output.Add("");
+                output.Add($"## {label}");
+                if (compactDirect) output.Add(FormatMemberNames(direct));
+                else output.AddRange(direct.Select(FormatMember));
+            }
+            foreach (var group in inherited)
+            {
+                output.Add("");
+                output.Add($"## {label} (inherited from `{group.Key}`)");
+                if (compactInherited) output.Add(FormatMemberNames(group));
+                else output.AddRange(group.Select(FormatMember));
+            }
+        }
+        return output;
+    }
+
     [McpServerTool(Name = "get_wpf_api_reference", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description(ToolDescriptions.GetWpfApiReference)]
     public CallToolResult GetApiReference(
@@ -112,10 +152,19 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
         [MinLength(1), MaxLength(128)]
         string component,
         [Description("""Member category to return. Defaults to "all". Use a specific category when the user asks only about properties, methods, or events.""")]
-        MemberKind kind = MemberKind.all)
+        MemberKind kind = MemberKind.all,
+        [Description("""
+            Optional member name filter — case-insensitive substring, combinable with "kind".
+                  Returns only the matching members, including inherited ones, with full detail (type, enum values, summary).
+                  Examples: "YAxis" (every YAxis* member), "FieldLayout", "Changed". Use it to check specific members on a large type,
+                  or to get details of members a compacted response lists by name only.
+            """)]
+        [MaxLength(64)]
+        string? member = null)
     {
         var timer = Stopwatch.StartNew();
-        var input = new { component, kind = kind.ToString() };
+        var input = new { component, kind = kind.ToString(), member };
+        var memberFilter = member?.Trim();
 
         var doc = store.LoadApiDoc(component);
         if (doc is null)
@@ -169,51 +218,59 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             output.Add(doc.Remarks);
         }
 
-        var hasAny = false;
-        foreach (var (label, kindKey) in new[] { ("Properties", "property"), ("Events", "event"), ("Methods", "method") })
+        var kindPrefix = kind == MemberKind.all ? "" : kind + " ";
+        if (!string.IsNullOrEmpty(memberFilter))
         {
-            var items = members.Where(m => m.kind == kindKey).Select(m => m.m).ToArray();
-            if (items.Length == 0) continue;
-            hasAny = true;
-
-            // Direct members first, then one section per ancestor in first-seen order.
-            var direct = items.Where(m => string.IsNullOrEmpty(m.DeclaredOn)).ToArray();
-            var inherited = items.Where(m => !string.IsNullOrEmpty(m.DeclaredOn)).GroupBy(m => m.DeclaredOn!);
-
-            if (direct.Length > 0)
-            {
-                output.Add("");
-                output.Add($"## {label}");
-                output.AddRange(direct.Select(FormatMember));
-            }
-            foreach (var group in inherited)
-            {
-                output.Add("");
-                output.Add($"## {label} (inherited from `{group.Key}`)");
-                output.AddRange(group.Select(FormatMember));
-            }
+            members = members.Where(m => m.m.Name.Contains(memberFilter, StringComparison.OrdinalIgnoreCase)).ToArray();
+            output.Add("");
+            output.Add(members.Length > 0
+                ? $"_Showing {members.Length} {kindPrefix}member(s) whose name contains \"{memberFilter}\", including inherited members._"
+                : $"_No {kindPrefix}members whose name contains \"{memberFilter}\", including inherited members. Call get_wpf_api_reference(\"{doc.Component}\") without \"member\" to see every member name, or search_wpf_api(\"{memberFilter}\") to find which type declares it._");
         }
 
-        if (!hasAny)
+        var sections = RenderMemberSections(members, compactInherited: false, compactDirect: false);
+
+        if (members.Length == 0 && string.IsNullOrEmpty(memberFilter))
         {
             var baseHint = !string.IsNullOrEmpty(doc.BaseType)
                 ? $"Call get_wpf_api_reference(\"{doc.BaseType}\") to see the inherited API surface."
                 : "This type has no recorded base type in the registry — it may be a leaf/root type with no further members to inherit.";
-            output.Add("");
-            output.Add($"_No {(kind == MemberKind.all ? "" : kind + " ")}members defined directly on this type._");
-            output.Add($"_This type's own API surface is empty or was filtered by \"kind\". {baseHint}_");
+            sections.Add("");
+            sections.Add($"_No {kindPrefix}members defined directly on this type._");
+            sections.Add($"_This type's own API surface is empty or was filtered by \"kind\". {baseHint}_");
         }
 
+        var footer = new List<string>();
         // Theming hint only when the type has Brush-typed members AND ships with named themes.
         var brushMembers = allMembers.Where(m => m.m.TypeName?.Contains("Brush", StringComparison.Ordinal) == true).Select(m => m.m).ToArray();
         if (brushMembers.Length > 0 && ThemeLookup.IsThemeable(doc.Component, store.ThemeIndex))
         {
             var examples = string.Join(", ", brushMembers.Take(3).Select(m => $"`{m.Name}`"));
-            output.Add("");
-            output.Add($"_⚠️ This type has Brush-typed properties (e.g. {examples}) and ships with named themes. Before setting these directly or writing Style/ControlTemplate overrides, call `setup_wpf_theme(component: \"{doc.Component}\")` to check whether a named theme (`Theme=\"...\"` or `ThemeManager`) already covers this, and to get exact resource file paths for customizing it._");
+            footer.Add("");
+            footer.Add($"_⚠️ This type has Brush-typed properties (e.g. {examples}) and ships with named themes. Before setting these directly or writing Style/ControlTemplate overrides, call `setup_wpf_theme(component: \"{doc.Component}\")` to check whether a named theme (`Theme=\"...\"` or `ThemeManager`) already covers this, and to get exact resource file paths for customizing it._");
         }
 
-        var text = string.Join('\n', output);
+        var text = string.Join('\n', output.Concat(sections).Concat(footer));
+
+        // Size guard: list inherited members by name only, and if that is still too big (a few types
+        // declare 250+ members themselves), direct members too. Headings stay, so "inherited from"
+        // remains visible; the note tells the agent how to get full details.
+        if (text.Length > MaxApiReferenceChars)
+        {
+            var fullLength = text.Length;
+            var compactDirect = string.Join('\n', output.Concat(RenderMemberSections(members, true, false)).Concat(footer)).Length > MaxApiReferenceChars;
+            sections = RenderMemberSections(members, compactInherited: true, compactDirect);
+            var what = compactDirect
+                ? "all members are listed by name only"
+                : "inherited members are listed by name only (members declared on this type keep full detail)";
+            var next = string.IsNullOrEmpty(memberFilter)
+                ? $"Call get_wpf_api_reference(component: \"{doc.Component}\", member: \"<name>\") for full details (type, enum values, summary) — \"member\" is a case-insensitive substring, so one call can cover a family of related members sharing a prefix."
+                : "Call again with a more specific \"member\" for full details (type, enum values, summary).";
+            output.Add("");
+            output.Add($"_ℹ️ Compacted: the full response would be {fullLength} characters, so {what}. {next}_");
+            text = string.Join('\n', output.Concat(sections).Concat(footer));
+        }
+
         log.Write("get_wpf_api_reference", input, text, timer);
         return ToolResult.Text(text);
     }
