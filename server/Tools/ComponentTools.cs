@@ -102,17 +102,21 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
     }
 
     // Above this size the full rendering gets saved to a file by clients like Claude Code instead
-    // of coming back inline (~28K was seen inline, 56K was not). Measured over all 6,907 types:
-    // ~210 exceed it, almost all because of members copied down from base classes.
+    // of coming back inline (~28K was seen inline, 56K was not). With the Infragistics 26.1.21 data
+    // ~210 types exceed it, almost all because of members copied down from base classes.
     internal const int MaxApiReferenceChars = 25_000;
+
+    // How much detail the member sections get; each step is only taken if the previous one is still too big.
+    private enum ApiDetail { Full, CompactInherited, CompactAll }
 
     // Compact rendering: one line of names per section; details come from a `member` call.
     private static string FormatMemberNames(IEnumerable<ApiMemberEntry> items) =>
         string.Join(", ", items.Select(m => $"`{m.Name}`"));
 
-    private static List<string> RenderMemberSections(
-        (ApiMemberEntry m, string kind)[] members, bool compactInherited, bool compactDirect)
+    private static List<string> RenderMemberSections((ApiMemberEntry m, string kind)[] members, ApiDetail detail)
     {
+        var compactInherited = detail != ApiDetail.Full;
+        var compactDirect = detail == ApiDetail.CompactAll;
         var output = new List<string>();
         foreach (var (label, kindKey) in new[] { ("Properties", "property"), ("Events", "event"), ("Methods", "method") })
         {
@@ -228,19 +232,17 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
                 : $"_No {kindPrefix}members whose name contains \"{memberFilter}\", including inherited members. Call get_wpf_api_reference(\"{doc.Component}\") without \"member\" to see every member name, or search_wpf_api(\"{memberFilter}\") to find which type declares it._");
         }
 
-        var sections = RenderMemberSections(members, compactInherited: false, compactDirect: false);
-
+        var footer = new List<string>();
         if (members.Length == 0 && string.IsNullOrEmpty(memberFilter))
         {
             var baseHint = !string.IsNullOrEmpty(doc.BaseType)
                 ? $"Call get_wpf_api_reference(\"{doc.BaseType}\") to see the inherited API surface."
                 : "This type has no recorded base type in the registry — it may be a leaf/root type with no further members to inherit.";
-            sections.Add("");
-            sections.Add($"_No {kindPrefix}members defined directly on this type._");
-            sections.Add($"_This type's own API surface is empty or was filtered by \"kind\". {baseHint}_");
+            footer.Add("");
+            footer.Add($"_No {kindPrefix}members defined directly on this type._");
+            footer.Add($"_This type's own API surface is empty or was filtered by \"kind\". {baseHint}_");
         }
 
-        var footer = new List<string>();
         // Theming hint only when the type has Brush-typed members AND ships with named themes.
         var brushMembers = allMembers.Where(m => m.m.TypeName?.Contains("Brush", StringComparison.Ordinal) == true).Select(m => m.m).ToArray();
         if (brushMembers.Length > 0 && ThemeLookup.IsThemeable(doc.Component, store.ThemeIndex))
@@ -250,7 +252,8 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             footer.Add($"_⚠️ This type has Brush-typed properties (e.g. {examples}) and ships with named themes. Before setting these directly or writing Style/ControlTemplate overrides, call `setup_wpf_theme(component: \"{doc.Component}\")` to check whether a named theme (`Theme=\"...\"` or `ThemeManager`) already covers this, and to get exact resource file paths for customizing it._");
         }
 
-        var text = string.Join('\n', output.Concat(sections).Concat(footer));
+        string Render(ApiDetail detail) => string.Join('\n', output.Concat(RenderMemberSections(members, detail)).Concat(footer));
+        var text = Render(ApiDetail.Full);
 
         // Size guard: list inherited members by name only, and if that is still too big (a few types
         // declare 250+ members themselves), direct members too. Headings stay, so "inherited from"
@@ -258,9 +261,8 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
         if (text.Length > MaxApiReferenceChars)
         {
             var fullLength = text.Length;
-            var compactDirect = string.Join('\n', output.Concat(RenderMemberSections(members, true, false)).Concat(footer)).Length > MaxApiReferenceChars;
-            sections = RenderMemberSections(members, compactInherited: true, compactDirect);
-            var what = compactDirect
+            var detail = Render(ApiDetail.CompactInherited).Length > MaxApiReferenceChars ? ApiDetail.CompactAll : ApiDetail.CompactInherited;
+            var what = detail == ApiDetail.CompactAll
                 ? "all members are listed by name only"
                 : "inherited members are listed by name only (members declared on this type keep full detail)";
             var next = string.IsNullOrEmpty(memberFilter)
@@ -268,7 +270,7 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
                 : "Call again with a more specific \"member\" for full details (type, enum values, summary).";
             output.Add("");
             output.Add($"_ℹ️ Compacted: the full response would be {fullLength} characters, so {what}. {next}_");
-            text = string.Join('\n', output.Concat(sections).Concat(footer));
+            text = Render(detail);
         }
 
         log.Write("get_wpf_api_reference", input, text, timer);

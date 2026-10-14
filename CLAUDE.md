@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A stdio MCP server exposing 9 read-only tools over Infragistics Ultimate UI for WPF: component registry, API reference, keyword search, docs search, project scaffolding, and theming. It has two runtimes over one data set: C# in `server/` (NuGet `Infragistics.Wpf.Mcp`, a `net10.0` `dotnet tool`, the only published package) and TypeScript in `src/` (npm packaging kept but no longer published). All data is pre-generated at build time into `src/data/` (gitignored) and served from `dist/data/` / the tool's `data/` folder as plain JSON/XAML file reads — no reflection or network at runtime. The two runtimes must return byte-identical output; `scripts/parity-test.ts` enforces it.
+A stdio MCP server exposing 9 read-only tools over Infragistics Ultimate UI for WPF: component registry, API reference, keyword search, docs search, project scaffolding, and theming. It has two runtimes over one data set: C# in `server/` (NuGet `Infragistics.Wpf.Mcp`, a `net10.0` `dotnet tool`, the only published package) and TypeScript in `src/` (npm packaging kept but no longer published). All data is pre-generated at build time into `src/data/` (gitignored) and served from `dist/data/` / the tool's `data/` folder as plain JSON/XAML file reads — no reflection or network at runtime. The TS server is frozen — don't edit `src/` — so new tools and behavior go into C# only and the two runtimes' output may differ (e.g. `get_wpf_api_reference` compaction and its `member` filter are C#-only). There is no parity contract or test any more.
 
 ## Commands
 
@@ -15,7 +15,6 @@ npm run build            # tsc only + copy src/data → dist/data. FAILS if src/
 npm run dev              # tsx src/index.ts (also needs src/data/ populated)
 npm test                 # smoke test: drives dist/index.js over stdio, calls every tool (scripts/smoke-test.ts)
 npm run build:dotnet     # dotnet build server/ (needs src/data/); npm run test:dotnet = smoke test against it
-npm run test:parity      # 60+ fixed calls against both servers, fails on any output difference
 npm run pack:dotnet      # dotnet pack → nupkg/ (version from package.json; -- --version X.Y.Z overrides)
 npm run typecheck        # tsc --noEmit for src/ and scripts/ — needs no data
 npm run validate:package # pre-publish gate: data thresholds, nupkg contents (when nupkg/ exists), version consistency (-- --expected-version X.Y.Z)
@@ -38,7 +37,7 @@ npm run docs:update      # pull latest for the 3 docs/theme submodules
 
 Requirements: Node ≥ 20 and the .NET 10 SDK (pinned by `global.json`). The type extractor targets `net10.0-windows` with `UseWPF`, so `generate:types` only runs on Windows. Submodules `docs/docs-wpf`, `docs/docs-common`, `docs/wpf-resources` are auto-initialized by `build:docs`/`build:themes` via `scripts/ensure-submodules.ts`.
 
-There is no unit-test suite or linter; `npm test`/`test:dotnet` are the stdio smoke tests, `test:parity` the cross-runtime diff, and `npm run validate:package` the data + nupkg gate. All run in CI and before publish.
+There is no unit-test suite or linter; `npm test`/`test:dotnet` are the stdio smoke tests (checks of C#-only behavior sit under `IS_DOTNET` in `scripts/smoke-test.ts`), and `npm run validate:package` the data + nupkg gate. All run in CI and before publish.
 
 Release/publish process (`npm run release -- <bump>` → PR → GitHub Release with bare tag → `nuget-publish.yml` builds, signs and publishes the NuGet package, then lists non-prerelease versions in the MCP Registry), CI/cache layout, SHA-pinned actions, nuget.org trusted publishing, and data-source bumps are documented in `DEVELOPMENT.md` — read it before touching `.github/`, `server.json`, `server/*.csproj`, `scripts/version.ts` or `scripts/validate-package.ts`.
 
@@ -53,9 +52,9 @@ Release/publish process (`npm run release -- <bump>` → PR → GitHub Release w
 - `scripts/build-themes.ts` copies `Themes/` (newer ThemeManager family) and `DefaultStyles/` (legacy embedded-BAML `Theme="..."` family) XAML from wpf-resources and records per-file `targetTypes` parsed from `TargetType=` declarations — this is what makes "is component X themeable" lookups content-aware rather than filename-based.
 - `scripts/build-guard.ts` `assertBuildStep()` is the fail-loud convention: any step whose output could be legitimately zero due to a missing upstream must assert instead of `console.warn`.
 
-### Runtime (`src/`)
+### Runtime (`src/`, frozen — not published, not edited; kept for reference and the TS smoke test)
 
-- `src/index.ts` — bootstrap: loads `namespaces.json`, `search-index.json`, `docs-index.json`, `theme-index.json` into memory once, defines the `--debug` logger, sets the server `instructions` (the canonical tool-calling workflow agents are told to follow), and registers each tool with `readOnlyHint/idempotentHint: true, openWorldHint: false`.
+- `src/index.ts` — bootstrap: loads `namespaces.json`, `search-index.json`, `docs-index.json`, `theme-index.json` into memory once, defines the `--debug` logger, sets the server `instructions` (the original of `server/ServerInstructions.cs`, which is now the canonical version), and registers each tool with `readOnlyHint/idempotentHint: true, openWorldHint: false`.
 - `src/tools/constants.ts` — `TOOL_DESCRIPTIONS` (long, prompt-engineered; they cross-reference each other by tool name).
 - `src/tools/schemas.ts` — zod input schemas; `.describe()` text is agent-facing guidance.
 - `src/tools/handlers.ts` — one `create<Tool>Handler(deps, log)` factory per tool returning `async (input) => CallToolResult`. Every return path (including `isError: true`) calls `log(toolName, input, text, ms)`. Output is markdown text. Search tools use OR/ranked token matching (name hits weighted over member hits over summary hits).
@@ -64,17 +63,17 @@ Release/publish process (`npm run release -- <bump>` → PR → GitHub Release w
 
 ### C# runtime (`server/`)
 
-- `Program.cs` — same bootstrap as `src/index.ts` on the official `ModelContextProtocol` SDK: stderr-only logging, `--debug` file log, `ServerInstructions.cs` (verbatim copy of the instructions), `.WithTools<T>()` per tool class.
+- `Program.cs` — same bootstrap as `src/index.ts` on the official `ModelContextProtocol` SDK: stderr-only logging, `--debug` file log, `ServerInstructions.cs` (the server instructions; started as a copy of the TS ones), `.WithTools<T>()` per tool class.
 - `Data/Models.cs` (records + `WpfJsonContext` source-gen), `Data/DataStore.cs` (startup indexes, on-demand loaders, `ResolveInside` containment check), `Data/NameComparer.cs` (deterministic stand-in for JS `localeCompare`).
-- `Tools/ComponentTools.cs`, `SearchTools.cs`, `DocsTools.cs`, `ThemeTools.cs` — one `[McpServerTool]` method per tool, `[Description]` = zod `.describe()`, DataAnnotations = zod constraints (schema-only; clamp in code). `Tools/ToolDescriptions.cs` mirrors `constants.ts`, `Tools/Enums.cs` the `z.enum()` lists, `Tools/ToolLog.cs` the `--debug` logger.
+- `Tools/ComponentTools.cs`, `SearchTools.cs`, `DocsTools.cs`, `ThemeTools.cs` — one `[McpServerTool]` method per tool; parameter `[Description]`s are the agent-facing input guidance (originally ported from the zod `.describe()` text), DataAnnotations are schema-only constraints (the SDK doesn't enforce them; clamp/validate in code). `Tools/ToolDescriptions.cs` the tool descriptions (ported from `constants.ts`), `Tools/Enums.cs` the enum inputs, `Tools/ToolLog.cs` the `--debug` logger.
 - `Infragistics.Wpf.Mcp.csproj` — `PackAsTool` + `PackageType McpServer`; `src/data/**` is a `Content` item with `Pack="false"` (it ships inside the tool folder, not as NuGet content), root `server.json` is packed as `.mcp/server.json`.
-- Quirks are mirrored on purpose (JS `""` falsiness for optional strings) — see comments at each site. Change TS and C# together, then run `test:parity`.
-- `server/**/*.cs` must stay LF (`.gitattributes` enforces it): raw string literals carry the file's line endings into descriptions/instructions, and CRLF breaks parity with the TS (template literals always normalize to LF).
+- Some JS quirks were ported on purpose (JS `""` falsiness for optional strings) — see comments at each site; keep them unless you mean to change agent-visible behavior.
+- `server/**/*.cs` must stay LF (`.gitattributes` enforces it): raw string literals carry the file's line endings into descriptions/instructions, so a CRLF checkout would change the agent-facing text.
 
 ### Conventions worth knowing
 
 - ESM with `module: Node16` — relative imports must use `.js` extensions even for `.ts` sources.
-- `ApiEntry`, `DocIndexEntry`/`DocEntry`, and `ThemeIndex` shapes exist three times: `scripts/*.ts` (producer), `src/lib/types.ts` (Node consumer) and `server/Data/Models.cs` (C# consumer; scripts intentionally don't import from `src/`). Change all three when changing the data shape.
-- Adding a tool touches four TS files: `constants.ts` (description), `schemas.ts` (input), `handlers.ts` (factory), `index.ts` (registration + any new startup data) — plus its C# mirror in `server/Tools/`, a case in `scripts/smoke-test.ts` and calls in `scripts/parity-test.ts`.
+- `ApiEntry`, `DocIndexEntry`/`DocEntry`, and `ThemeIndex` shapes exist three times: `scripts/*.ts` (producer), `src/lib/types.ts` (Node consumer) and `server/Data/Models.cs` (C# consumer; scripts intentionally don't import from `src/`). Change the producer and `Models.cs` together. `src/lib/types.ts` is the one exception to "don't edit `src/`": additive fields need nothing there, but a breaking shape change must keep the TS server able to read the data, because CI still runs the TS smoke test against it.
+- Adding or changing a tool is C#-only: `server/Tools/ToolDescriptions.cs` (description), the `[McpServerTool]` method in `server/Tools/` (+ `.WithTools<T>()` in `Program.cs` for a new class), and a case in `scripts/smoke-test.ts` under `IS_DOTNET` (the TS smoke test still runs in CI against the frozen TS server).
 - `nuget/type-info.json`, `nuget/packages/`, `nuget/bin|obj/`, `src/data/`, `dist/`, `server/bin|obj/` and `nupkg/` are all gitignored build outputs — never commit them. The publish workflow regenerates them; what pins a release's content is `nuget/WpfDocs.csproj` + the submodule commits.
 - `package.json` version and `server.json` version(s) must match — `scripts/version.ts` keeps them in sync; don't edit either by hand. The csproj has no real version (`0.0.0-dev`); `pack:dotnet`/CI inject it.

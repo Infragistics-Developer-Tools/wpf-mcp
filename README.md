@@ -112,7 +112,7 @@ To run from a source checkout instead, build it first (see [DEVELOPMENT.md](DEVE
 
 ## Contributing
 
-Build pipeline, data updates, adding tools, versioning and the publish process are documented in [DEVELOPMENT.md](https://github.com/Infragistics-Developer-Tools/wpf-mcp/blob/main/DEVELOPMENT.md). The published C# server lives in `server/`. A TypeScript implementation in `src/` reads the same generated data and is kept in sync by a parity test, but it is not published.
+Build pipeline, data updates, adding tools, versioning and the publish process are documented in [DEVELOPMENT.md](https://github.com/Infragistics-Developer-Tools/wpf-mcp/blob/main/DEVELOPMENT.md). The published C# server lives in `server/`. A TypeScript implementation in `src/` reads the same generated data; it is frozen and not published, and newer behavior (such as the `get_wpf_api_reference` size guard) exists only in the C# server.
 
 ## License
 

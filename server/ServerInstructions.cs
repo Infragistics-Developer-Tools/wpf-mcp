@@ -1,7 +1,7 @@
 namespace Infragistics.Wpf.Mcp;
 
-// Started as a verbatim copy of the `instructions` string in src/index.ts. The TS server is no longer
-// published or edited, so step 2 (compaction + `member`) now exists only here.
+// Started as a verbatim copy of the `instructions` string in src/index.ts. The TS server is frozen
+// and there is no parity test, so this is the source of truth; step 2 (compaction + `member`) exists only here.
 public static class ServerInstructions
 {
     public const string Text = """

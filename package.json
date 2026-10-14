@@ -41,7 +41,6 @@
     "dev": "tsx src/index.ts",
     "test": "npx tsx scripts/smoke-test.ts",
     "test:dotnet": "npx tsx scripts/smoke-test.ts --dotnet",
-    "test:parity": "npx tsx scripts/parity-test.ts",
     "build:dotnet": "dotnet build server/Infragistics.Wpf.Mcp.csproj -nologo -v q",
     "pack:dotnet": "npx tsx scripts/pack-dotnet.ts",
     "typecheck": "tsc --noEmit && tsc -p scripts",

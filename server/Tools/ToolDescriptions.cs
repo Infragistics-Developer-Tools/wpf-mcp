@@ -1,6 +1,7 @@
 namespace Infragistics.Wpf.Mcp.Tools;
 
-// Verbatim copies of TOOL_DESCRIPTIONS in src/tools/constants.ts — keep both in sync.
+// Started as verbatim copies of TOOL_DESCRIPTIONS in src/tools/constants.ts. The TS server is
+// frozen, so these are now the source of truth and may differ (e.g. GetWpfApiReference).
 public static class ToolDescriptions
 {
     public const string ListWpfComponents = """
