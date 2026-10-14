@@ -2,7 +2,8 @@ using System.Text.Json.Serialization;
 
 namespace Infragistics.Wpf.Mcp.Data;
 
-// Mirrors src/lib/types.ts — change both when changing the data shape.
+// C# consumer of the shapes produced by scripts/*.ts (src/lib/types.ts is the frozen TS consumer).
+// Change this together with the producer; see "Conventions" in CLAUDE.md for when src/ needs it too.
 
 public sealed record ComponentEntry(
     string Component,

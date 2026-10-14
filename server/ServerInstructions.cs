@@ -1,6 +1,7 @@
 namespace Infragistics.Wpf.Mcp;
 
-// Verbatim copy of the `instructions` string in src/index.ts — keep both in sync.
+// Started as a verbatim copy of the `instructions` string in src/index.ts. The TS server is frozen
+// and there is no parity test, so this is the source of truth; step 2 (compaction + `member`) exists only here.
 public static class ServerInstructions
 {
     public const string Text = """
@@ -9,7 +10,7 @@ public static class ServerInstructions
 
               Canonical workflow — these tools form one chain, follow it in order and reuse the exact names between steps, don't skip ahead to writing XAML:
                 1. Resolve the component name: list_wpf_components (Xam* control you can name or want to browse) or search_wpf_api (only know a feature/keyword, e.g. "filter", "export").
-                2. get_wpf_api_reference(component) using that exact name for the authoritative member list. If sparse, it names a base type — call it again on that base type.
+                2. get_wpf_api_reference(component) using that exact name for the authoritative member list. If sparse, it names a base type — call it again on that base type. Large types come back compacted (inherited members by name only) — call it again with member: "<name substring>" for full details of the members you need.
                 3. Whenever the task needs HOW-TO guidance beyond "what members exist" — layouts/nesting, styling/theming, data binding, editing/validation, filtering/sorting/grouping/summaries, exporting, performance, commands, known issues, etc. — call search_wpf_docs(query, control: component), passing the SAME component name from step 1/2 to scope the search.
                 4. get_wpf_doc(slug) on the most relevant result from step 3 to read the full XAML example or how-to text before writing any code or giving usage advice.
                 5. For new projects, get_wpf_project_scaffold(components) after step 1 for dotnet CLI + xmlns setup, then still run steps 2-4 per component before writing real XAML.
