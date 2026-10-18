@@ -2,7 +2,7 @@
 
 <!-- mcp-name: io.github.Infragistics-Developer-Tools/wpf-mcp -->
 
-MCP server for **Infragistics Ultimate UI for WPF** — component registry, XAML namespace lookup, full API reference with property types and enum values, keyword search across 6,900+ types, 2,600+ documentation topics, and named-theme setup with palette re-coloring. Everything an AI coding agent needs to write correct Infragistics XAML instead of guessing.
+MCP server for **Infragistics Ultimate UI for WPF** — component registry, XAML namespace lookup, full API reference with property types and enum values, keyword search across 6,900+ types, 2,600+ documentation topics, and named-theme setup with verified recolor steps. Everything an AI coding agent needs to write correct Infragistics XAML instead of guessing.
 
 Packaged as a `dotnet tool`. All Infragistics data ships inside the package; nothing is downloaded at runtime, and every tool is read-only.
 
@@ -86,7 +86,7 @@ To use `dnx` instead of a global install, set `"command": "dnx"` and `"args": ["
 | `get_wpf_api_reference` | Full API reference for any type: properties with types and enum values, events, methods, and inherited members grouped by base class. |
 | `setup_wpf_theme` | List available named themes and the raw XAML files backing them, covering both theming mechanisms (legacy embedded-BAML `Theme="..."` and newer `ThemeManager`). Returns ready-to-paste apply steps. |
 | `get_wpf_theme_resource` | Retrieve the full raw XAML of one theme/style resource-dictionary file (real `Style`/`ControlTemplate`/brush definitions) to copy and override. |
-| `get_wpf_theme_palette` | Return a newer-family (ThemeManager) theme's centralized color/brush palette — exact resource keys, values, and a ready-to-merge override skeleton — for re-coloring a theme without creating a new one. |
+| `get_wpf_theme_palette` | Return a newer-family (ThemeManager) theme's color/brush palette — exact resource keys and values — plus verified steps to recolor that theme (control-level overrides or an extended theme) without creating a new one. |
 | `search_wpf_docs` | Search how-to documentation topics by keyword and/or control name — layouts, styling, data binding, filtering/sorting/grouping, exporting, performance, known issues, etc. |
 | `get_wpf_doc` | Full text (including XAML samples) of one documentation topic by slug. |
 

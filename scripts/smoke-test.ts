@@ -21,7 +21,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT  = join(__dirname, '..');
 const ENTRY = join(ROOT, 'dist', 'index.js');
 const DOTNET_DLL = process.env.WPF_MCP_DOTNET_DLL ?? join(ROOT, 'server', 'bin', 'Debug', 'net10.0', 'wpf-mcp.dll');
-const TARGET = process.argv.includes('--dotnet')
+const DOTNET = process.argv.includes('--dotnet');
+const TARGET = DOTNET
   ? { entry: DOTNET_DLL, command: 'dotnet', args: [DOTNET_DLL], hint: 'dotnet build server/' }
   : { entry: ENTRY, command: process.execPath, args: [ENTRY], hint: 'npm run build' };
 
@@ -130,6 +131,12 @@ async function main(): Promise<void> {
     text = textOf(r);
     const path = /`(Themes\/[^`]+\.xaml)`/.exec(text)?.[1];
     check('component+theme filter yields a resource path', !r.isError && !!path, text.slice(0, 300));
+    if (DOTNET) {
+      // The IG theme's class is IgTheme; `new IGTheme()` does not compile (C# server only — src/ is not updated).
+      r = await call('setup_wpf_theme', { component: 'DataChart', theme: 'IG' });
+      text = textOf(r);
+      check('IG apply block uses the IgTheme class', !r.isError && text.includes('new Infragistics.Themes.IgTheme()') && !text.includes('IGTheme()'), text.slice(0, 600));
+    }
 
     console.log('get_wpf_theme_resource');
     if (path) {
@@ -145,6 +152,19 @@ async function main(): Promise<void> {
     check('MetroDark palette has color keys', !r.isError && /Color_\d+|Brush\d+/.test(text), text.slice(0, 300));
     r = await call('get_wpf_theme_palette', {});
     check('omitting theme returns the chooser', !r.isError && textOf(r).includes('MetroDark'));
+    if (DOTNET) {
+      // Overriding palette keys does not recolor a theme (verified); the tool returns verified recolor steps
+      // instead, with class names read from each theme's own files (C# server only — src/ is not updated).
+      r = await call('get_wpf_theme_palette', { theme: 'RoyalDark' });
+      text = textOf(r);
+      check('no palette-override skeleton', !r.isError && !text.includes('Override skeleton') && text.includes('does not recolor the theme'), text.slice(-600));
+      check('RoyalDark steps name its compiled grid and DockManager classes',
+        text.includes('igThemes:DataPresenterRoyalDark.CellValuePresenter') && text.includes('DockManagerRoyalDark_Brushes.xaml') && text.includes('Infragistics.Themes.RoyalDarkTheme'));
+      r = await call('get_wpf_theme_palette', { theme: 'IG' });
+      text = textOf(r);
+      check('IG steps use IgTheme and DataPresenterIGTheme',
+        !r.isError && text.includes('Infragistics.Themes.IgTheme') && text.includes('igThemes:DataPresenterIGTheme.CellValuePresenter') && !text.includes('IGTheme()'));
+    }
   } finally {
     await client.close();
   }
