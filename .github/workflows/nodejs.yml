@@ -24,7 +24,7 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
 
-  # The real thing: full data generation + both servers + smoke/parity tests + package
+  # The real thing: full data generation + both servers + smoke tests + package
   # validation. windows-latest because scripts/type-extractor targets net10.0-windows
   # and loads WPF assemblies; nothing else in the pipeline needs Windows.
   build-and-test:

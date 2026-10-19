@@ -2,7 +2,7 @@
 
 How to build, test, release and publish `Infragistics.Wpf.Mcp` (NuGet `dotnet tool`). For what the server does and how to install it, see [README.md](README.md).
 
-The C# server in `server/` is the only published runtime. The TypeScript server in `src/` still drives the data pipeline's tests and the parity check, and its npm packaging (`package.json`, `npm pack`) is kept so npm publishing can be revived — see [npm (retired)](#npm-retired).
+The C# server in `server/` is the only published runtime. The TypeScript server in `src/` is frozen: it is no longer edited, new tools and behavior go into C# only, and there is no parity check between the two. CI still runs the smoke test against it as a second consumer of the generated data, and its npm packaging (`package.json`, `npm pack`) is kept so npm publishing can be revived — see [npm (retired)](#npm-retired).
 
 ## Prerequisites
 
@@ -97,8 +97,7 @@ Then set `NUGET_FEED_USERNAME` / `NUGET_FEED_PASSWORD` in your environment and r
 | `npm run dev` | Run `src/index.ts` with tsx (needs `src/data/`) |
 | `npm test` | Smoke test: starts `dist/index.js` over stdio and calls every tool against the real data (`scripts/smoke-test.ts`) |
 | `npm run build:dotnet` | `dotnet build` the C# server (`server/`) — copies `src/data` next to the binary, so it needs `src/data/` too |
-| `npm run test:dotnet` | The same smoke test against the C# build (`smoke-test.ts --dotnet`) |
-| `npm run test:parity` | Runs 60+ fixed tool calls against both servers and fails on any difference in instructions, tool descriptions/annotations, or output text (`scripts/parity-test.ts`) |
+| `npm run test:dotnet` | The same smoke test against the C# build (`smoke-test.ts --dotnet`), plus the checks for C#-only behavior (under `IS_DOTNET`) |
 | `npm run pack:dotnet` | `dotnet pack` → `nupkg/Infragistics.Wpf.Mcp.<version>.nupkg`, version from `package.json` (`-- --version X.Y.Z` overrides) |
 | `npm run typecheck` | `tsc --noEmit` for `src/` and `scripts/` — the only check that needs no data |
 | `npm run validate:package` | Pre-publish gate: data-set thresholds, `dist/index.js` shebang, build-info ↔ csproj consistency, and — when `nupkg/` exists — the NuGet package's metadata, `.mcp/server.json` and data counts; `-- --expected-version X.Y.Z` also checks `package.json`, `server.json` and the nupkg version, and requires the nupkg |
@@ -110,7 +109,7 @@ Then set `NUGET_FEED_USERNAME` / `NUGET_FEED_PASSWORD` in your environment and r
 | `npm run docs:update` | Move the three submodules to their latest upstream commit |
 | `npm pack --dry-run` | Show exactly what would be published to npm and how big it is (~12 MB tarball, ~100 MB unpacked, ~10k files); the nupkg from `pack:dotnet` is ~19 MB |
 
-Before opening a PR: `npm run typecheck && npm run build:all && npm test && npm run build:dotnet && npm run test:dotnet && npm run test:parity && npm run pack:dotnet && npm run validate:package`. CI runs the same.
+Before opening a PR: `npm run typecheck && npm run build:all && npm test && npm run build:dotnet && npm run test:dotnet && npm run pack:dotnet && npm run validate:package`. CI runs the same.
 
 The C# server is a second runtime over the same `src/data/`, not a second product: `server/Program.cs` (bootstrap), `server/Data/` (models + loaders), `server/Tools/*.cs` (one class per tool group). Locally it builds as version `0.0.0-dev` (the placeholder in the csproj); `pack:dotnet` and CI override it with `-p:Version` from `package.json` or the release tag.
 
@@ -126,7 +125,7 @@ To bump, either run the **Bump Infragistics data sources** workflow (Actions →
 ```bash
 sed -i -E 's/(<PackageReference [^>]*Version=")[^"]+(")/\126.1.30\2/' nuget/WpfDocs.csproj
 npm run docs:update
-npm run build:all && npm test && npm run build:dotnet && npm run test:parity && npm run validate:package
+npm run build:all && npm test && npm run build:dotnet && npm run test:dotnet && npm run validate:package
 git add nuget/WpfDocs.csproj docs/
 git commit -m "chore(data): bump Infragistics sources (26.1.30)"
 ```
@@ -137,26 +136,19 @@ git commit -m "chore(data): bump Infragistics sources (26.1.30)"
 
 ## Adding or changing a tool
 
-Four TypeScript files, in this order:
+C# only — `src/` is frozen:
 
-1. `src/tools/constants.ts` — `TOOL_DESCRIPTIONS.<name>`; the descriptions cross-reference each other by tool name.
-2. `src/tools/schemas.ts` — zod input schema; `.describe()` text is agent-facing guidance.
-3. `src/tools/handlers.ts` — `create<Name>Handler(deps, log)` returning `async (input) => CallToolResult`. Every return path, including `isError: true`, must call `log(...)`.
-4. `src/index.ts` — `server.registerTool(...)` with `readOnlyHint: true, idempotentHint: true, openWorldHint: false`, plus any new startup-loaded index.
+1. `server/Tools/ToolDescriptions.cs` — the description as a raw string literal; the descriptions cross-reference each other by tool name. Workflow-level guidance goes in `server/ServerInstructions.cs`.
+2. `server/Tools/<Group>Tools.cs` — a `[McpServerTool(Name = "...", ReadOnly = true, Idempotent = true, OpenWorld = false)]` method; `[Description]` on parameters is agent-facing guidance, `[MinLength]/[MaxLength]/[Range]` only describe the schema (the SDK doesn't enforce them — clamp/validate in code), enums go in `server/Tools/Enums.cs`. Every return path, including errors, calls `log.Write(...)`. A new tool class is registered with `.WithTools<T>()` in `server/Program.cs`; a new data file gets a record in `server/Data/Models.cs` (add it to `WpfJsonContext`) and a loader in `server/Data/DataStore.cs`.
+3. A case in `scripts/smoke-test.ts`. The same script also runs against the frozen TS server, so put checks of C#-only behavior (and, for a new tool, the expected tool list) under `IS_DOTNET`.
+4. If the tool reads a new file family, a threshold in `scripts/validate-package.ts`.
 
-Then the C# mirror — the parity test fails until it matches byte-for-byte:
-
-5. `server/Tools/ToolDescriptions.cs` — the same description text as a raw string literal.
-6. `server/Tools/<Group>Tools.cs` — a `[McpServerTool(Name = "...", ReadOnly = true, Idempotent = true, OpenWorld = false)]` method; `[Description]` on parameters is the zod `.describe()` text, `[MinLength]/[MaxLength]/[Range]` are the zod constraints (schema-only — clamp in code like the TS does), enums go in `server/Tools/Enums.cs`. Every return path calls `log.Write(...)`. A new tool class is registered with `.WithTools<T>()` in `server/Program.cs`; a new data file gets a record in `server/Data/Models.cs` (add it to `WpfJsonContext`) and a loader in `server/Data/DataStore.cs`.
-
-Finally add a case to `scripts/smoke-test.ts`, a few calls (including error paths) to `CALLS` in `scripts/parity-test.ts`, and, if the tool reads a new file family, a threshold to `scripts/validate-package.ts`.
-
-Porting gotchas that already bit once: JS `localeCompare` (use `NameComparer`), JS truthiness of `""` for optional strings, and line endings — C# raw string literals keep the source file's newlines, so `server/**/*.cs` is pinned to LF in `.gitattributes`; a CRLF checkout fails the parity test with lines that look identical.
+Gotchas: `server/**/*.cs` is pinned to LF in `.gitattributes` because C# raw string literals keep the source file's newlines, so a CRLF checkout would change the agent-facing text. Some JS behaviors were ported on purpose and are commented at each site (`NameComparer` for JS `localeCompare`, JS truthiness of `""` for optional strings).
 
 Conventions:
 
 - ESM with `module: Node16`: relative imports use `.js` extensions even for `.ts` sources.
-- `ApiEntry`, `DocIndexEntry`/`DocEntry` and `ThemeIndex` are declared three times — in `scripts/*.ts` (producer), `src/lib/types.ts` (Node consumer) and `server/Data/Models.cs` (C# consumer). Scripts intentionally don't import from `src/`; change all three.
+- `ApiEntry`, `DocIndexEntry`/`DocEntry` and `ThemeIndex` are declared three times — in `scripts/*.ts` (producer), `src/lib/types.ts` (Node consumer) and `server/Data/Models.cs` (C# consumer). Scripts intentionally don't import from `src/`. Change the producer and `Models.cs` together; additive fields need no TS change, but a breaking shape change must also update `src/lib/types.ts` (the one exception to "`src/` is frozen"), because CI still runs the TS smoke test against the same data.
 - Any on-demand file read goes through `resolveInside()` in `src/lib/safe-path.ts` (containment check, no character allowlist — generated names contain backticks, spaces and braces).
 - A build step whose output count could legitimately be zero because of a missing upstream must `assertBuildStep(...)`, not warn.
 
@@ -186,7 +178,7 @@ A prerelease version (`-alpha`/`-beta`/`-rc`) is a normal SemVer prerelease on n
 
 | Workflow | Trigger | Runner | Does |
 |---|---|---|---|
-| `nodejs.yml` — *Node.js CI* | push / PR to `main` | `typecheck`: ubuntu · `build-and-test`: windows, Node 22 + 24 | `npm ci` → `typecheck` → `build:all` → `test` → `build:dotnet` → `test:dotnet` → `test:parity` → `pack:dotnet` → `validate:package` → prints package sizes |
+| `nodejs.yml` — *Node.js CI* | push / PR to `main` | `typecheck`: ubuntu · `build-and-test`: windows, Node 22 + 24 | `npm ci` → `typecheck` → `build:all` → `test` → `build:dotnet` → `test:dotnet` → `pack:dotnet` → `validate:package` → prints package sizes |
 | `nuget-publish.yml` — *NuGet publish* | GitHub Release published | `build`, `sign`: windows · `publish-nuget`, `publish-mcp-registry`: ubuntu | `build`: same as CI (nupkg stamped with the tag) + `validate:package --expected-version <tag>` → unsigned nupkg artifact. `sign` (environment `nuget-org-publish`): Azure login + one `sign code` call on the `.nupkg`, which Authenticode-signs `wpf-mcp.dll` inside it (selected by `eng/sign-filelist.txt`) and then the package itself → both signatures validated → nupkg artifact. `publish-nuget` (same environment): `NuGet/login` + `dotnet nuget push`. `publish-mcp-registry` (skipped for prereleases): wait for nuget.org to serve the version, `mcp-publisher publish` |
 | `bump-infragistics.yml` — *Bump Infragistics data sources* | manual | ubuntu | Rewrites csproj versions and/or `docs:update`, opens a PR |
 
@@ -211,7 +203,7 @@ It restores two caches:
 
 With both hot, a full CI job is ~3 min (the C# build, tests and pack add about a minute); cold (first run after a bump) 5–8 min.
 
-**Where to look when publish fails:** the `build` job's *Validate package contents* step prints one `OK`/error line per check — a version mismatch means the release tag doesn't match `package.json`/`server.json` (redo the bump), a threshold failure means the data pipeline produced less than expected (read the *Build data and server* step for the 🚨 banner), a `nupkg` error names what is wrong with the NuGet package. A *Parity test* failure prints the first differing line per call — the C# port has drifted from the TypeScript (or vice versa). `publish-nuget` failing at `NuGet/login` with an auth error means the nuget.org trusted-publishing policy doesn't cover this workflow (next section); `publish-mcp-registry` failing with "Registry validation failed for package" means the published README lacks the `mcp-name` marker, which `validate:package` normally catches first.
+**Where to look when publish fails:** the `build` job's *Validate package contents* step prints one `OK`/error line per check — a version mismatch means the release tag doesn't match `package.json`/`server.json` (redo the bump), a threshold failure means the data pipeline produced less than expected (read the *Build data and server* step for the 🚨 banner), a `nupkg` error names what is wrong with the NuGet package. `publish-nuget` failing at `NuGet/login` with an auth error means the nuget.org trusted-publishing policy doesn't cover this workflow (next section); `publish-mcp-registry` failing with "Registry validation failed for package" means the published README lacks the `mcp-name` marker, which `validate:package` normally catches first.
 
 ## First-time and manual publishing
 
@@ -259,9 +251,19 @@ Infragistics WPF NuGet packages ship two files per assembly: `InfragisticsWPF.*.
 - When two types share a short name, the one documenting more members wins the file name; the others are listed in its `alternates`.
 - `ASSEMBLY_XMLNS` maps assembly → xmlns URI/prefix; unlisted assemblies get `http://schemas.infragistics.com/xaml` / `ig`. `namespaces.json` contains only `Xam*`-prefixed types.
 
+### `get_wpf_api_reference` size guard
+
+Because inherited members are copied onto every subclass, a few hundred types (mostly charts and annotation layers) rendered to 25–72K characters, and clients like Claude Code save results that large to a file instead of returning them inline. The C# `get_wpf_api_reference` therefore compacts any response over `MaxApiReferenceChars` (25,000, in `ComponentTools.cs`), taking the first of these levels whose output, note included, fits:
+
+1. Events and methods are listed by name only; properties keep full detail. Properties go last because they are what XAML needs, and on the grids nearly all of them are inherited (`XamDataGrid`: 1 of 74 is its own), so compacting inherited members first would hide exactly those. Skipped when the response has no properties (`kind: "events"`/`"methods"`).
+2. Inherited members are listed by name only, one line per "inherited from" section (chosen over name + type: at a 25K threshold name-only gives `XamCategoryChart` 19.8K and leaves 8 types over the limit, while name + type gives 26.2K and leaves 12).
+3. All members are listed by name only (6 types that declare 250+ members themselves, e.g. `Series`, `XamDomainChart`).
+
+Section headings always stay, so every member name and its declaring type remain visible. A compacted response says so and points to the optional `member` parameter, a case-insensitive name substring that returns only the matching members, inherited ones included, in full detail. The guard applies to `member`-filtered responses as well, so a very broad filter can't bypass it. Measured over all 6,907 types of the Infragistics 26.1.21 data (re-measure after a data bump): max 71,686 → 24,863 chars, p99 58,954 → 16,717; 211 types are compacted (32 at level 1, among them `XamDataGrid` 19.0K, `XamTreeGrid` 19.0K and `XamGrid` 14.9K with every property in full; 173 at level 2, among them the charts; 6 at level 3) and all others render byte-identically to before.
+
 ### Two runtimes, one data set
 
-`src/` (TypeScript, not published) and `server/` (C#, published to NuGet) implement the same nine tools over the same generated `src/data/`. Neither is derived from the other — they are kept identical by `scripts/parity-test.ts`, which CI runs on every push. The C# server uses the official `ModelContextProtocol` SDK: tools are `[McpServerTool]` methods whose parameters become the input schema (DataAnnotations → JSON Schema constraints), models are records with a source-generated `JsonSerializerContext`, data files are `Content` items copied next to the binary (`Pack="false"`, so they travel inside the tool's `tools/net10.0/any/data/` folder rather than as NuGet content files). The nupkg also carries `PackageType` `McpServer` (nuget.org renders the MCP install snippet) and `.mcp/server.json`.
+`src/` (TypeScript, not published, frozen) and `server/` (C#, published to NuGet) serve the same nine tools over the same generated `src/data/`. The C# server started as a byte-for-byte port, but the two now diverge where C# has moved on (e.g. the size guard above), and there is no parity test. The C# server uses the official `ModelContextProtocol` SDK: tools are `[McpServerTool]` methods whose parameters become the input schema (DataAnnotations → JSON Schema constraints), models are records with a source-generated `JsonSerializerContext`, data files are `Content` items copied next to the binary (`Pack="false"`, so they travel inside the tool's `tools/net10.0/any/data/` folder rather than as NuGet content files). The nupkg also carries `PackageType` `McpServer` (nuget.org renders the MCP install snippet) and `.mcp/server.json`.
 
 ### Runtime data layout
 
