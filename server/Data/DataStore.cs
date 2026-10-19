@@ -5,7 +5,7 @@ namespace Infragistics.Wpf.Mcp.Data;
 
 /// Loads the generated data set from `data/` next to the executable — the same files
 /// `dist/data/` holds for the npm package. Indexes are read once; api docs, doc topics
-/// and theme XAML are read on demand (mirrors src/lib/*-loader.ts).
+/// and theme XAML are read on demand (originally ported from src/lib/*-loader.ts).
 public sealed class DataStore
 {
     private readonly string _apiDir;

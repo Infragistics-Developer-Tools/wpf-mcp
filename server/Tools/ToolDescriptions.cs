@@ -1,6 +1,7 @@
 namespace Infragistics.Wpf.Mcp.Tools;
 
-// Verbatim copies of TOOL_DESCRIPTIONS in src/tools/constants.ts — keep both in sync.
+// Started as verbatim copies of TOOL_DESCRIPTIONS in src/tools/constants.ts. The TS server is
+// frozen, so these are now the source of truth and may differ (e.g. GetWpfApiReference).
 public static class ToolDescriptions
 {
     public const string ListWpfComponents = """
@@ -22,7 +23,9 @@ public static class ToolDescriptions
     public const string GetWpfApiReference = """
         Get full API documentation for an Infragistics WPF type: xmlns declaration, NuGet package, type summary, and all members (properties, methods, events) with descriptions.
 
-        Use after list_wpf_components (or search_wpf_api, if the exact type name isn't known yet) to resolve the component name. Also use to check whether a specific property or event exists on a known type — it returns the complete member list, including members inherited from Infragistics base classes.
+        Use after list_wpf_components (or search_wpf_api, if the exact type name isn't known yet) to resolve the component name. Also use to check whether a specific property or event exists on a known type — it returns the complete member list, including members inherited from Infragistics base classes (grouped under "inherited from `Base`" headings).
+
+        Large types (mostly charts and grids, whose members are largely inherited) are compacted to stay under ~25K characters, giving up detail in this order until the response fits: events and methods are listed by name only first (properties keep full detail), then inherited members, and as a last resort all members. The response then says so in an "ℹ️ Compacted" line. Every member name is always listed. For full properties only, kind: "properties" is often small enough to come back uncompacted. To get full details (type, enum values, summary) for specific members, pass member: a case-insensitive name substring, combinable with kind — e.g. get_wpf_api_reference("XamCategoryChart", member: "YAxis") returns every YAxis* member, inherited ones included. When you already know which members you need, pass member up front.
 
         If a type's own member list is unexpectedly sparse, the response names its base type — call get_wpf_api_reference again on that base type to see the rest of the inherited surface.
 
