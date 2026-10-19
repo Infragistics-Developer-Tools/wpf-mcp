@@ -102,6 +102,14 @@ async function main(): Promise<void> {
       r = await call('get_wpf_api_reference', { component: 'XamCategoryChart' });
       text = textOf(r);
       check('large type is compacted under 25K chars', !r.isError && text.length <= 25_000 && text.includes('_ℹ️ Compacted:') && text.includes('(inherited from `XamXYChart`)\n`'), `${text.length} chars`);
+      // Grids: events/methods go to names first, so the (mostly inherited) properties XAML needs keep full detail.
+      for (const grid of ['XamDataGrid', 'XamGrid']) {
+        r = await call('get_wpf_api_reference', { component: grid });
+        text = textOf(r);
+        check(`${grid} compaction keeps full property detail`,
+          !r.isError && text.length <= 25_000 && text.includes('events and methods are listed by name only') && /^- \*\*\w+\*\* `[A-Za-z.]+` — values: `/m.test(text),
+          `${text.length} chars`);
+      }
       r = await call('get_wpf_api_reference', { component: 'XamCategoryChart', member: 'yaxis' });
       text = textOf(r);
       check('member filter returns inherited members in full detail',

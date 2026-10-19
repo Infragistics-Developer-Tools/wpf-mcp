@@ -106,8 +106,26 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
     // ~210 types exceed it, almost all because of members copied down from base classes.
     internal const int MaxApiReferenceChars = 25_000;
 
-    // How much detail the member sections get; each step is only taken if the previous one is still too big.
-    private enum ApiDetail { Full, CompactInherited, CompactAll }
+    // How much detail the member sections get, tried in this order; the first rendering that fits wins.
+    // Properties keep full detail the longest because they are what XAML needs (types, enum values):
+    // on the grids nearly every property is inherited, so compacting inherited members first would
+    // hide exactly those. Events and methods are one `member` call away.
+    private enum ApiDetail { Full, CompactEventsMethods, CompactInherited, CompactAll }
+
+    private static bool IsCompact(ApiDetail detail, string kindKey, bool inherited) => detail switch
+    {
+        ApiDetail.Full => false,
+        ApiDetail.CompactEventsMethods => kindKey != "property",
+        ApiDetail.CompactInherited => inherited,
+        _ => true,
+    };
+
+    private static string CompactionSummary(ApiDetail detail) => detail switch
+    {
+        ApiDetail.CompactEventsMethods => "events and methods are listed by name only (properties keep full detail)",
+        ApiDetail.CompactInherited => "inherited members are listed by name only (members declared on this type keep full detail)",
+        _ => "all members are listed by name only",
+    };
 
     // Compact rendering: one line of names per section; details come from a `member` call.
     private static string FormatMemberNames(IEnumerable<ApiMemberEntry> items) =>
@@ -115,8 +133,6 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
 
     private static List<string> RenderMemberSections((ApiMemberEntry m, string kind)[] members, ApiDetail detail)
     {
-        var compactInherited = detail != ApiDetail.Full;
-        var compactDirect = detail == ApiDetail.CompactAll;
         var output = new List<string>();
         foreach (var (label, kindKey) in new[] { ("Properties", "property"), ("Events", "event"), ("Methods", "method") })
         {
@@ -131,14 +147,14 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             {
                 output.Add("");
                 output.Add($"## {label}");
-                if (compactDirect) output.Add(FormatMemberNames(direct));
+                if (IsCompact(detail, kindKey, inherited: false)) output.Add(FormatMemberNames(direct));
                 else output.AddRange(direct.Select(FormatMember));
             }
             foreach (var group in inherited)
             {
                 output.Add("");
                 output.Add($"## {label} (inherited from `{group.Key}`)");
-                if (compactInherited) output.Add(FormatMemberNames(group));
+                if (IsCompact(detail, kindKey, inherited: true)) output.Add(FormatMemberNames(group));
                 else output.AddRange(group.Select(FormatMember));
             }
         }
@@ -226,10 +242,17 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
         if (!string.IsNullOrEmpty(memberFilter))
         {
             members = members.Where(m => m.m.Name.Contains(memberFilter, StringComparison.OrdinalIgnoreCase)).ToArray();
+            var (one, many) = kind switch
+            {
+                MemberKind.properties => ("property", "properties"),
+                MemberKind.events => ("event", "events"),
+                MemberKind.methods => ("method", "methods"),
+                _ => ("member", "members"),
+            };
             output.Add("");
             output.Add(members.Length > 0
-                ? $"_Showing {members.Length} {kindPrefix}member(s) whose name contains \"{memberFilter}\", including inherited members._"
-                : $"_No {kindPrefix}members whose name contains \"{memberFilter}\", including inherited members. Call get_wpf_api_reference(\"{doc.Component}\") without \"member\" to see every member name, or search_wpf_api(\"{memberFilter}\") to find which type declares it._");
+                ? $"_Showing {members.Length} {(members.Length == 1 ? one : many)} whose name contains \"{memberFilter}\", including inherited ones._"
+                : $"_No {many} whose name contains \"{memberFilter}\", including inherited ones. Call get_wpf_api_reference(\"{doc.Component}\") without \"member\" to see every member name, or search_wpf_api(\"{memberFilter}\") to find which type declares it._");
         }
 
         var footer = new List<string>();
@@ -252,25 +275,25 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             footer.Add($"_⚠️ This type has Brush-typed properties (e.g. {examples}) and ships with named themes. Before setting these directly or writing Style/ControlTemplate overrides, call `setup_wpf_theme(component: \"{doc.Component}\")` to check whether a named theme (`Theme=\"...\"` or `ThemeManager`) already covers this, and to get exact resource file paths for customizing it._");
         }
 
-        string Render(ApiDetail detail) => string.Join('\n', output.Concat(RenderMemberSections(members, detail)).Concat(footer));
+        string Render(ApiDetail detail, string? note = null) => string.Join('\n',
+            (note is null ? output : output.Append("").Append(note)).Concat(RenderMemberSections(members, detail)).Concat(footer));
         var text = Render(ApiDetail.Full);
 
-        // Size guard: list inherited members by name only, and if that is still too big (a few types
-        // declare 250+ members themselves), direct members too. Headings stay, so "inherited from"
-        // remains visible; the note tells the agent how to get full details.
+        // Size guard: take the first level of ApiDetail whose rendering, note included, fits. Headings
+        // stay, so "inherited from" remains visible; the note tells the agent how to get full details.
         if (text.Length > MaxApiReferenceChars)
         {
             var fullLength = text.Length;
-            var detail = Render(ApiDetail.CompactInherited).Length > MaxApiReferenceChars ? ApiDetail.CompactAll : ApiDetail.CompactInherited;
-            var what = detail == ApiDetail.CompactAll
-                ? "all members are listed by name only"
-                : "inherited members are listed by name only (members declared on this type keep full detail)";
             var next = string.IsNullOrEmpty(memberFilter)
                 ? $"Call get_wpf_api_reference(component: \"{doc.Component}\", member: \"<name>\") for full details (type, enum values, summary) — \"member\" is a case-insensitive substring, so one call can cover a family of related members sharing a prefix."
                 : "Call again with a more specific \"member\" for full details (type, enum values, summary).";
-            output.Add("");
-            output.Add($"_ℹ️ Compacted: the full response would be {fullLength} characters, so {what}. {next}_");
-            text = Render(detail);
+            string Compacted(ApiDetail detail) =>
+                Render(detail, $"_ℹ️ Compacted: the full response would be {fullLength} characters, so {CompactionSummary(detail)}. {next}_");
+            // Without properties (kind: events/methods) the first level would only cost the members declared on this type their detail.
+            var levels = members.Any(m => m.kind == "property")
+                ? new[] { ApiDetail.CompactEventsMethods, ApiDetail.CompactInherited }
+                : new[] { ApiDetail.CompactInherited };
+            text = levels.Select(Compacted).FirstOrDefault(t => t.Length <= MaxApiReferenceChars) ?? Compacted(ApiDetail.CompactAll);
         }
 
         log.Write("get_wpf_api_reference", input, text, timer);
