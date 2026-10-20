@@ -88,6 +88,10 @@ async function main(): Promise<void> {
     let r = await call('list_wpf_components', { filter: 'grid' });
     let text = textOf(r);
     check('filter "grid" finds XamDataGrid with its xmlns', !r.isError && text.includes('XamDataGrid') && text.includes('http://infragistics.com/DataPresenter'));
+    // The xmlns comes from the DLL's own XmlnsDefinition per namespace, not one guess per assembly
+    // (XamTabControl used to get http://schemas.infragistics.com/xaml, which doesn't compile).
+    r = await call('list_wpf_components', { filter: 'XamTabControl' });
+    check('XamTabControl gets the xmlns its DLL maps it to', !r.isError && textOf(r).includes('xmlns:igWindows="http://infragistics.com/Windows"'), textOf(r).slice(0, 300));
 
     console.log('get_wpf_api_reference');
     r = await call('get_wpf_api_reference', { component: 'XamDataGrid', kind: 'all' });
@@ -97,6 +101,29 @@ async function main(): Promise<void> {
     // kind: properties — small enough to render every member (inherited ones included) in full.
     r = await call('get_wpf_api_reference', { component: 'XamDataGrid', kind: 'properties' });
     check('property types and enum values are attached', /`[A-Za-z.]+` — values: `/.test(textOf(r)), 'no "`Type` — values: `…`" member line — type-info.json was not merged');
+    // Theme classes: their xmlns is http://infragistics.com/Themes, and their static styles come from a generic base.
+    r = await call('get_wpf_api_reference', { component: 'DataPresenterRoyalDark' });
+    text = textOf(r);
+    check('theme class gets the Themes xmlns and its inherited static styles',
+      !r.isError && text.includes('xmlns:igThemes="http://infragistics.com/Themes"') && text.includes('**CellValuePresenter** `Style`') && text.includes('(inherited from `DataPresenterResourceSet`1`)'),
+      text.slice(0, 400));
+    // Static key/command fields are listed (they used to be dropped: DataPresenterCommands showed 0 of 71 commands).
+    r = await call('get_wpf_api_reference', { component: 'DataPresenterCommands', kind: 'properties' });
+    check('static command fields are listed', !r.isError && textOf(r).includes('**DeleteSelectedDataRecords** `RoutedCommand`'), textOf(r).slice(0, 300));
+    // type-info strings are JSON-unescaped (generic type names used to reach agents as Action<ToolCommand>).
+    // (C# compacts XamDataChart's inherited properties to names, so ask for the member itself there.)
+    r = await call('get_wpf_api_reference', IS_DOTNET ? { component: 'XamDataChart', member: 'CommandCompleted' } : { component: 'XamDataChart', kind: 'properties' });
+    check('generic type names are not JSON-escaped', !r.isError && textOf(r).includes('`Action<ToolCommand>`') && !/\\u00[0-9A-F]{2}/.test(textOf(r)));
+    // Inheritance follows the exact base type: the chart Axis used to show members of the Excel library's ChartObject.
+    r = await call('get_wpf_api_reference', { component: 'Axis', kind: 'properties' });
+    check('chart Axis does not inherit from a same-named type', !r.isError && !textOf(r).includes('ChartObject'));
+    if (IS_DOTNET) {
+      // C# only: field label and nested-class XAML name are rendered by the C# server.
+      r = await call('get_wpf_api_reference', { component: 'DataPresenterCommands', member: 'DeleteSelectedDataRecords' });
+      check('static fields are labelled', !r.isError && textOf(r).includes('`RoutedCommand` _(static field)_'), textOf(r).slice(0, 400));
+      r = await call('get_wpf_api_reference', { component: 'ActionBase' });
+      check('nested classes show their XAML name', !r.isError && textOf(r).includes('**XAML name:** `igHelpers:ActionHistory+ActionBase`'), textOf(r).slice(0, 400));
+    }
     if (IS_DOTNET) {
       // C# only: the TS server has no size guard / member filter.
       r = await call('get_wpf_api_reference', { component: 'XamCategoryChart' });
