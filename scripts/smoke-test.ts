@@ -92,6 +92,10 @@ async function main(): Promise<void> {
     // (XamTabControl used to get http://schemas.infragistics.com/xaml, which doesn't compile).
     r = await call('list_wpf_components', { filter: 'XamTabControl' });
     check('XamTabControl gets the xmlns its DLL maps it to', !r.isError && textOf(r).includes('xmlns:igWindows="http://infragistics.com/Windows"'), textOf(r).slice(0, 300));
+    // Internal classes are not indexed: the XML docs document them too, but no app can use them.
+    r = await call('list_wpf_components', { filter: 'Funnel' });
+    text = textOf(r);
+    check('internal classes are not listed as controls', !r.isError && text.includes('XamFunnelChart') && !text.includes('XamFunnelController') && !text.includes('XamFunnelConnector'), text.slice(0, 300));
 
     console.log('get_wpf_api_reference');
     r = await call('get_wpf_api_reference', { component: 'XamDataGrid', kind: 'all' });
@@ -117,6 +121,13 @@ async function main(): Promise<void> {
     // Inheritance follows the exact base type: the chart Axis used to show members of the Excel library's ChartObject.
     r = await call('get_wpf_api_reference', { component: 'Axis', kind: 'properties' });
     check('chart Axis does not inherit from a same-named type', !r.isError && !textOf(r).includes('ChartObject'));
+    // Internal classes have no page, and a name an internal class used to win now documents the public class.
+    r = await call('get_wpf_api_reference', { component: 'ActivePaneManager' });
+    check('internal class has no API page', r.isError === true, textOf(r).slice(0, 200));
+    r = await call('get_wpf_api_reference', { component: 'DashboardTileGroupDescription' });
+    text = textOf(r);
+    check('public type wins its name over an internal one',
+      !r.isError && text.includes('`Infragistics.Controls.Dashboards.DashboardTileGroupDescription`') && !text.includes('.Implementation.'), text.slice(0, 400));
     if (IS_DOTNET) {
       // C# only: field label and nested-class XAML name are rendered by the C# server.
       r = await call('get_wpf_api_reference', { component: 'DataPresenterCommands', member: 'DeleteSelectedDataRecords' });
@@ -153,6 +164,9 @@ async function main(): Promise<void> {
     console.log('search_wpf_api');
     r = await call('search_wpf_api', { query: 'filter', limit: 5 });
     check('keyword search returns ranked results', !r.isError && textOf(r).includes('# WPF API Search'));
+    // "active pane" used to rank the internal ActivePaneManager first.
+    r = await call('search_wpf_api', { query: 'active pane', limit: 10 });
+    check('search does not return internal classes', !r.isError && !textOf(r).includes('ActivePaneManager'), textOf(r).slice(0, 300));
 
     console.log('get_wpf_project_scaffold');
     r = await call('get_wpf_project_scaffold', { components: ['XamDataGrid', 'XamCategoryChart'], projectName: 'SmokeApp', framework: 'net10.0' });

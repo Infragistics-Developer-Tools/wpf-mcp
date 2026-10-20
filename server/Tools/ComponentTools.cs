@@ -166,7 +166,7 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
     [Description(ToolDescriptions.GetWpfApiReference)]
     public CallToolResult GetApiReference(
         [Description("""
-            Any Infragistics WPF type name — 7000+ types including controls (e.g. "XamDataGrid"),
+            Any public Infragistics WPF type name — 5,300+ types including controls (e.g. "XamDataGrid"),
                   supporting types (e.g. "FieldLayout", "SummaryDefinition"), enums, strategies, indicators, and more.
                   Case-insensitive. To find a Xam* control name use list_wpf_components. To discover any other type name use search_wpf_api.
             """)]

@@ -1,6 +1,6 @@
 # wpf-mcp
 
-MCP server for **Infragistics Ultimate UI for WPF** — component registry, XAML namespace lookup, full API reference with property types and enum values, keyword search across 6,900+ types, and named-theme setup with verified recolor steps.
+MCP server for **Infragistics Ultimate UI for WPF** — component registry, XAML namespace lookup, full API reference with property types and enum values, keyword search across 5,300+ public types, and named-theme setup with verified recolor steps.
 
 Distributed as a NuGet `dotnet tool`, [`Infragistics.Wpf.Mcp`](https://www.nuget.org/packages/Infragistics.Wpf.Mcp) — currently in **beta** (`0.1.0-beta.0`). From the first stable release it will also be listed in the [MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.Infragistics-Developer-Tools/wpf-mcp`.
 
@@ -10,9 +10,9 @@ All tools are read-only (`readOnlyHint: true`, `openWorldHint: false`) — none 
 
 | Tool | Description |
 |---|---|
-| `list_wpf_components` | List all 191 Xam* controls with canonical XAML namespace URIs, NuGet packages, and descriptions. Always call this first before writing XAML. |
+| `list_wpf_components` | List all 189 Xam* controls with canonical XAML namespace URIs, NuGet packages, and descriptions. Always call this first before writing XAML. |
 | `get_wpf_project_scaffold` | Generate ready-to-run `dotnet new` + `dotnet add package` + `dotnet restore` commands and xmlns declarations for a new WPF project. Pass component names resolved via `list_wpf_components`. |
-| `search_wpf_api` | Search across all 6,900+ types by keyword — matches type names, summaries, and member names. Use when you don't know the exact type name. |
+| `search_wpf_api` | Search across all 5,300+ public types by keyword — matches type names, summaries, and member names. Use when you don't know the exact type name. |
 | `get_wpf_api_reference` | Full API reference for any type: properties with types and enum values, events, methods, and inherited members grouped by base class. Large types are compacted to stay under ~25K characters (events and methods first, then inherited members, are listed by name only); the optional `member` filter (case-insensitive name substring, e.g. `"YAxis"`) returns full details for just the members you need. |
 | `setup_wpf_theme` | List available named themes and the raw XAML files backing them, covering both theming mechanisms (legacy embedded-BAML `Theme="..."` and newer `ThemeManager`). Returns ready-to-paste apply steps. Call first for any theming task. |
 | `get_wpf_theme_resource` | Retrieve the full raw XAML of one theme/style resource-dictionary file (real `Style`/`ControlTemplate`/brush definitions) to copy and override. Use the exact `path` from `setup_wpf_theme`. |

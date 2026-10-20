@@ -13,6 +13,7 @@
  *   "TypeShortName.PropName"    : { typeName, isNullable, isEnum, enumValues? }          (instance and static)
  *   "TypeShortName.FieldName"   : { typeName, isNullable, isEnum, isField: true }        (static ResourceKey/RoutedCommand fields)
  *   "__xaml"                    : { "Assembly|Namespace.Type" (nested: "…|Namespace.Outer.Inner") : { xmlns, prefix, ns, xamlName? } }
+ *   "__nonPublicTypes"          : [ "Assembly|Namespace.Type", … ]   (internal / private nested types, to leave out)
  */
 
 using System;
@@ -178,6 +179,22 @@ foreach (var asm in loaded) {
 
 output["__baseTypes"] = baseTypes;
 Console.Error.WriteLine($"[TypeExtractor] phase 2: {output.Count} entries, {baseTypes.Count} base types");
+
+// ── Non-public types ─────────────────────────────────────────────────────────
+// The XML docs also document internal and private nested classes (ActivePaneManager, XamFunnelController, …),
+// which no app can use. Only types reflection positively sees as non-public are listed — a type that can't be
+// loaded (e.g. a .NET Framework-only DLL) is not, so a load failure can never hide public API.
+var nonPublicTypes = new SortedSet<string>(StringComparer.Ordinal);
+foreach (var asm in loaded) {
+    Type?[] all;
+    try { all = asm.GetTypes(); } catch (ReflectionTypeLoadException ex) { all = ex.Types; } catch { continue; }
+    foreach (var t in all) {
+        if (t?.FullName == null || t.IsVisible || !t.FullName.StartsWith("Infragistics.", StringComparison.Ordinal)) continue;
+        nonPublicTypes.Add($"{asm.GetName().Name}|{t.FullName.Replace('+', '.')}");
+    }
+}
+output["__nonPublicTypes"] = nonPublicTypes;
+Console.Error.WriteLine($"[TypeExtractor] non-public types: {nonPublicTypes.Count}");
 
 // ── Phase 3: the XAML namespace of every public type ─────────────────────────
 // Resolved with System.Xaml's XamlSchemaContext — the XmlnsDefinition rules the WPF markup compiler applies — so

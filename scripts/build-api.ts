@@ -241,15 +241,17 @@ function loadTypeInfo(): Record<string, TypeInfoEntry | string> {
  * The extractor's maps keyed by "Assembly|Namespace.Type" (nested: "…|Namespace.Outer.Inner"), so types that share
  * a short name can't overwrite each other: each type's XAML namespace and prefix, and its Infragistics base type.
  */
-function loadExtractorMaps(): { xaml: Record<string, XamlTypeInfo>; baseTypes: Record<string, string> } {
+function loadExtractorMaps(): { xaml: Record<string, XamlTypeInfo>; baseTypes: Record<string, string>; nonPublic: Set<string> } {
   const parsed = JSON.parse(readFileSync(join(ROOT, 'nuget', 'type-info.json'), 'utf-8'));
   const xaml = parsed.__xaml as Record<string, XamlTypeInfo> | undefined;
   const baseTypes = parsed.__baseTypes as Record<string, string> | undefined;
-  assertBuildStep(!!xaml && Object.keys(xaml).length > 0 && !!baseTypes && Object.keys(baseTypes).length > 0,
-    `nuget/type-info.json has no "__xaml" / "__baseTypes" section — it was written by an older type extractor, so ` +
-    `every type would get a guessed xmlns and no inherited members. Run: npm run generate:types`
+  const nonPublic = parsed.__nonPublicTypes as string[] | undefined;
+  assertBuildStep(!!xaml && Object.keys(xaml).length > 0 && !!baseTypes && Object.keys(baseTypes).length > 0 && !!nonPublic?.length,
+    `nuget/type-info.json has no "__xaml" / "__baseTypes" / "__nonPublicTypes" section — it was written by an older ` +
+    `type extractor, so every type would get a guessed xmlns, no inherited members, and internal classes would be ` +
+    `indexed as usable. Run: npm run generate:types`
   );
-  return { xaml: xaml!, baseTypes: baseTypes! };
+  return { xaml: xaml!, baseTypes: baseTypes!, nonPublic: new Set(nonPublic) };
 }
 
 /**
@@ -318,7 +320,8 @@ async function generate() {
   mkdirSync(API_OUT_DIR, { recursive: true });
 
   const typeInfo = loadTypeInfo();
-  const { xaml: xamlTypes, baseTypes } = loadExtractorMaps();
+  const { xaml: xamlTypes, baseTypes, nonPublic } = loadExtractorMaps();
+  let skippedNonPublic = 0;
   // Prefix per xmlns, for the few types the extractor has no entry for (generics, DLLs left out of XAML resolution).
   const prefixByXmlns = new Map(Object.values(xamlTypes).map(x => [x.xmlns, x.prefix]));
   const xamlFallbacks: string[] = [];
@@ -375,6 +378,9 @@ async function generate() {
       if (!type.fullName.startsWith('Infragistics.')) continue;
       const typeName = type.name;
       if (shouldExclude(typeName)) continue;
+      // The XML docs also document internal / private nested classes, which apps can't use. Leaving them out here,
+      // before short-name collisions are resolved, also lets a public type win its name (DashboardTileGroupDescription).
+      if (nonPublic.has(`${assemblyName}|${type.fullName}`)) { skippedNonPublic++; continue; }
 
       // For a nested type this is "Namespace.Outer", which keeps the C# full name right; xamlName carries "Outer+Inner".
       const dotnetNs = type.fullName.substring(0, type.fullName.lastIndexOf('.'));
@@ -457,6 +463,7 @@ async function generate() {
     }    console.log(`${Date.now() - t0}ms  (${members.length} members)`);
   }
 
+  console.log(`Left out ${skippedNonPublic} non-public (internal / private nested) type(s) documented in the XML.`);
   const genericFallbacks = xamlFallbacks.filter(n => n.includes('`')).length;
   console.log(`XAML namespaces: ${xamlFallbacks.length} type(s) fell back to clr-namespace syntax ` +
     `(${genericFallbacks} generic, ${xamlFallbacks.length - genericFallbacks} other${xamlFallbacks.length > genericFallbacks ? `: ${xamlFallbacks.filter(n => !n.includes('`')).slice(0, 8).join(', ')}` : ''})`);
