@@ -68,11 +68,19 @@ dnx Infragistics.Wpf.Mcp --prerelease --yes
 }
 ```
 
-**Claude Code** — from a terminal:
+**Claude Code** (CLI or VS Code extension) — add `.mcp.json` to your project root:
 
-```bash
-claude mcp add infragistics-wpf -- wpf-mcp
+```json
+{
+  "mcpServers": {
+    "infragistics-wpf": {
+      "command": "wpf-mcp"
+    }
+  }
+}
 ```
+
+Approve the server when Claude Code asks, then type `/mcp` in the chat to check that `infragistics-wpf` is connected. If the `claude` command is on your `PATH` (the VS Code extension doesn't add it), you can run `claude mcp add infragistics-wpf -- wpf-mcp` instead.
 
 To use `dnx` instead of a global install, set `"command": "dnx"` and `"args": ["Infragistics.Wpf.Mcp@0.1.0-beta.0", "--yes"]` in any of the above (`claude mcp add infragistics-wpf -- dnx Infragistics.Wpf.Mcp@0.1.0-beta.0 --yes`).
 

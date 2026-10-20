@@ -90,11 +90,19 @@ Press `Ctrl+C` to stop it. To try the tools without an AI client, open it in the
 }
 ```
 
-**Claude Code** — from a terminal:
+**Claude Code** (CLI or VS Code extension) — add `.mcp.json` to your project root:
 
-```bash
-claude mcp add infragistics-wpf -- wpf-mcp
+```json
+{
+  "mcpServers": {
+    "infragistics-wpf": {
+      "command": "wpf-mcp"
+    }
+  }
+}
 ```
+
+Approve the server when Claude Code asks, then type `/mcp` in the chat to check that `infragistics-wpf` is connected. If the `claude` command is on your `PATH` (the VS Code extension doesn't add it), you can run `claude mcp add infragistics-wpf -- wpf-mcp` instead.
 
 To use `dnx` instead of a global install, set `"command": "dnx"` and `"args": ["Infragistics.Wpf.Mcp@0.1.0-beta.0", "--yes"]` (Claude Code: `claude mcp add infragistics-wpf -- dnx Infragistics.Wpf.Mcp@0.1.0-beta.0 --yes`). Add `"--debug"` to `args` for any client to log every tool call/response to `wpf-mcp.log` in your system temp folder (override with the `WPF_MCP_LOG` environment variable) — see [Troubleshooting](#troubleshooting).
 
