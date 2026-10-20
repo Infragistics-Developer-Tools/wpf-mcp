@@ -13,7 +13,7 @@
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -88,6 +88,14 @@ async function main(): Promise<void> {
     let r = await call('list_wpf_components', { filter: 'grid' });
     let text = textOf(r);
     check('filter "grid" finds XamDataGrid with its xmlns', !r.isError && text.includes('XamDataGrid') && text.includes('http://infragistics.com/DataPresenter'));
+    // The xmlns comes from the DLL's own XmlnsDefinition per namespace, not one guess per assembly
+    // (XamTabControl used to get http://schemas.infragistics.com/xaml, which doesn't compile).
+    r = await call('list_wpf_components', { filter: 'XamTabControl' });
+    check('XamTabControl gets the xmlns its DLL maps it to', !r.isError && textOf(r).includes('xmlns:igWindows="http://infragistics.com/Windows"'), textOf(r).slice(0, 300));
+    // Internal classes are not indexed: the XML docs document them too, but no app can use them.
+    r = await call('list_wpf_components', { filter: 'Funnel' });
+    text = textOf(r);
+    check('internal classes are not listed as controls', !r.isError && text.includes('XamFunnelChart') && !text.includes('XamFunnelController') && !text.includes('XamFunnelConnector'), text.slice(0, 300));
 
     console.log('get_wpf_api_reference');
     r = await call('get_wpf_api_reference', { component: 'XamDataGrid', kind: 'all' });
@@ -97,6 +105,36 @@ async function main(): Promise<void> {
     // kind: properties — small enough to render every member (inherited ones included) in full.
     r = await call('get_wpf_api_reference', { component: 'XamDataGrid', kind: 'properties' });
     check('property types and enum values are attached', /`[A-Za-z.]+` — values: `/.test(textOf(r)), 'no "`Type` — values: `…`" member line — type-info.json was not merged');
+    // Theme classes: their xmlns is http://infragistics.com/Themes, and their static styles come from a generic base.
+    r = await call('get_wpf_api_reference', { component: 'DataPresenterRoyalDark' });
+    text = textOf(r);
+    check('theme class gets the Themes xmlns and its inherited static styles',
+      !r.isError && text.includes('xmlns:igThemes="http://infragistics.com/Themes"') && text.includes('**CellValuePresenter** `Style`') && text.includes('(inherited from `DataPresenterResourceSet`1`)'),
+      text.slice(0, 400));
+    // Static key/command fields are listed (they used to be dropped: DataPresenterCommands showed 0 of 71 commands).
+    r = await call('get_wpf_api_reference', { component: 'DataPresenterCommands', kind: 'properties' });
+    check('static command fields are listed', !r.isError && textOf(r).includes('**DeleteSelectedDataRecords** `RoutedCommand`'), textOf(r).slice(0, 300));
+    // type-info strings are JSON-unescaped (generic type names used to reach agents as Action<ToolCommand>).
+    // (C# compacts XamDataChart's inherited properties to names, so ask for the member itself there.)
+    r = await call('get_wpf_api_reference', IS_DOTNET ? { component: 'XamDataChart', member: 'CommandCompleted' } : { component: 'XamDataChart', kind: 'properties' });
+    check('generic type names are not JSON-escaped', !r.isError && textOf(r).includes('`Action<ToolCommand>`') && !/\\u00[0-9A-F]{2}/.test(textOf(r)));
+    // Inheritance follows the exact base type: the chart Axis used to show members of the Excel library's ChartObject.
+    r = await call('get_wpf_api_reference', { component: 'Axis', kind: 'properties' });
+    check('chart Axis does not inherit from a same-named type', !r.isError && !textOf(r).includes('ChartObject'));
+    // Internal classes have no page, and a name an internal class used to win now documents the public class.
+    r = await call('get_wpf_api_reference', { component: 'ActivePaneManager' });
+    check('internal class has no API page', r.isError === true, textOf(r).slice(0, 200));
+    r = await call('get_wpf_api_reference', { component: 'DashboardTileGroupDescription' });
+    text = textOf(r);
+    check('public type wins its name over an internal one',
+      !r.isError && text.includes('`Infragistics.Controls.Dashboards.DashboardTileGroupDescription`') && !text.includes('.Implementation.'), text.slice(0, 400));
+    if (IS_DOTNET) {
+      // C# only: field label and nested-class XAML name are rendered by the C# server.
+      r = await call('get_wpf_api_reference', { component: 'DataPresenterCommands', member: 'DeleteSelectedDataRecords' });
+      check('static fields are labelled', !r.isError && textOf(r).includes('`RoutedCommand` _(static field)_'), textOf(r).slice(0, 400));
+      r = await call('get_wpf_api_reference', { component: 'ActionBase' });
+      check('nested classes show their XAML name', !r.isError && textOf(r).includes('**XAML name:** `igHelpers:ActionHistory+ActionBase`'), textOf(r).slice(0, 400));
+    }
     if (IS_DOTNET) {
       // C# only: the TS server has no size guard / member filter.
       r = await call('get_wpf_api_reference', { component: 'XamCategoryChart' });
@@ -126,6 +164,9 @@ async function main(): Promise<void> {
     console.log('search_wpf_api');
     r = await call('search_wpf_api', { query: 'filter', limit: 5 });
     check('keyword search returns ranked results', !r.isError && textOf(r).includes('# WPF API Search'));
+    // "active pane" used to rank the internal ActivePaneManager first.
+    r = await call('search_wpf_api', { query: 'active pane', limit: 10 });
+    check('search does not return internal classes', !r.isError && !textOf(r).includes('ActivePaneManager'), textOf(r).slice(0, 300));
 
     console.log('get_wpf_project_scaffold');
     r = await call('get_wpf_project_scaffold', { components: ['XamDataGrid', 'XamCategoryChart'], projectName: 'SmokeApp', framework: 'net10.0' });
@@ -163,8 +204,35 @@ async function main(): Promise<void> {
 
     console.log('get_wpf_theme_resource');
     if (path) {
-      r = await call('get_wpf_theme_resource', { path });
+      // C# returns an overview for files over 24K (this one is ~155K) and the XAML by page; the frozen TS server cuts it off.
+      r = await call('get_wpf_theme_resource', IS_DOTNET ? { path, page: 1 } : { path });
       check(`returns XAML for ${path}`, !r.isError && textOf(r).includes('<ResourceDictionary'));
+    }
+    if (IS_DOTNET && path) {
+      // Large theme files are no longer cut off: overview, then pages that concatenate to the exact file.
+      r = await call('get_wpf_theme_resource', { path });
+      text = textOf(r);
+      const pageCount = Number(/comes in (\d+) pages/.exec(text)?.[1] ?? 0);
+      check('large theme file returns a contents overview', !r.isError && pageCount > 1 && text.includes('## Contents') && text.length <= 25_000, text.slice(0, 300));
+      let joined = '';
+      for (let p = 1; p <= pageCount; p++) {
+        const pr = await call('get_wpf_theme_resource', { path, page: p });
+        joined += /```xml\n([\s\S]*)\n```$/.exec(textOf(pr))?.[1] ?? '\u0000';
+      }
+      const onDisk = readFileSync(join(ROOT, 'src', 'data', 'theme-resources', path), 'utf8').replace(/^﻿/, '');
+      check(`its ${pageCount} pages concatenate to the exact file`, joined === onDisk, `${joined.length} vs ${onDisk.length} chars`);
+      // 36 matches here, so the result itself takes 2 pages: the root start tag is on the first, the end tag on the last.
+      r = await call('get_wpf_theme_resource', { path, find: 'Legend' });
+      text = textOf(r);
+      const findPages = Number(/\(page 1 of (\d+)\)/.exec(text)?.[1] ?? 1);
+      let found = /```xml\n([\s\S]*)\n```$/.exec(text)?.[1] ?? '';
+      for (let p = 2; p <= findPages; p++)
+        found += /```xml\n([\s\S]*)\n```$/.exec(textOf(await call('get_wpf_theme_resource', { path, find: 'Legend', page: p })))?.[1] ?? '';
+      check('find returns matching entries in full, inside the root element',
+        !r.isError && /entr(y|ies) matching "Legend"/.test(text) && found.includes('<ResourceDictionary') && found.trimEnd().endsWith('</ResourceDictionary>'),
+        text.slice(0, 300));
+      r = await call('get_wpf_theme_resource', { path, page: pageCount + 1 });
+      check('a page past the end is a clear error', r.isError === true && textOf(r).includes('out of range'));
     }
     r = await call('get_wpf_theme_resource', { path: '../../package.json' });
     check('path traversal is rejected', r.isError === true);

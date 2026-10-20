@@ -39,7 +39,7 @@ First run takes 2–5 minutes, almost all of it the NuGet restore and the type e
 A healthy build ends with these counts (they drift slightly between Infragistics versions):
 
 ```
-Registry:     191 Xam* controls → src/data/namespaces.json
+Registry:     189 Xam* controls → src/data/namespaces.json
 Search index: 6907 types → src/data/search-index.json
 Topics written : 2678
 theme-index.json: 8 newer themes, 45 legacy style folders, 822 XAML files total.
@@ -241,15 +241,20 @@ A version can never be pushed twice, so a rerun of the workflow for a tag that a
 
 ### Why reflection at build time
 
-Infragistics WPF NuGet packages ship two files per assembly: `InfragisticsWPF.*.dll` and the compiler-generated `InfragisticsWPF.*.xml` doc comments. The XML gives summaries but no property types, enum values or inheritance; only reflection on the DLL does. So `scripts/type-extractor/Program.cs` loads every Infragistics DLL into one `AssemblyLoadContext`, walks all public types and writes `nuget/type-info.json` — a flat map of `"Type.Prop" → {typeName, isNullable, isEnum, enumValues}` plus `"Type.__baseType" → "Base"`. `scripts/build-api.ts` then merges that with the XML docs. No reflection happens at query time; a tool call is a JSON file read.
+Infragistics WPF NuGet packages ship two files per assembly: `InfragisticsWPF.*.dll` and the compiler-generated `InfragisticsWPF.*.xml` doc comments. The XML gives summaries but no property types, enum values or inheritance; only reflection on the DLL does. So `scripts/type-extractor/Program.cs` loads every Infragistics DLL into one `AssemblyLoadContext`, walks all public types and writes `nuget/type-info.json` — a flat map of `"Type.Prop" → {typeName, isNullable, isEnum, enumValues}` (static properties and static `ResourceKey`/`RoutedCommand` fields included, the latter with `isField`), plus `__baseTypes` and `__xaml`, both keyed by `"Assembly|Namespace.Type"` so types sharing a short name can't overwrite each other. `scripts/build-api.ts` then merges that with the XML docs.
+
+The xmlns of each type is resolved here, not guessed: the extractor reads every DLL's `XmlnsDefinition`/`XmlnsPrefix` attributes and asks System.Xaml's `XamlSchemaContext` — the rules the WPF markup compiler applies — which xmlns resolves to exactly that type. When a namespace has several (e.g. `http://infragistics.com/Themes` and the catch-all `http://schemas.infragistics.com/xaml/wpf`), the one mapping the fewest namespaces wins. Types no Infragistics xmlns reaches (or where a same-named type shadows them) get `clr-namespace:Ns;assembly=Asm`, with a unique `ig…` prefix; nested types get `xamlName` `Outer+Inner`. A DLL whose Infragistics references aren't in the set (the .NET Framework-only Exchange connector) is left out of resolution, because `XamlSchemaContext` throws on every lookup otherwise. Measured on 26.1.21: all 5,180 public non-generic indexed types resolve to the exact type, and a WPF build of 308 sampled XAML files using the generated xmlns succeeds (the previous per-assembly table got 1,984 of them wrong). No reflection happens at query time; a tool call is a JSON file read.
 
 ### build-api.ts specifics
 
 - XML files are parsed with split-based chunking, not a regex over the whole multi-MB file, and members are bucketed into a `Map<typeFQN, members>` (O(n)).
-- `enrichWithInheritance()` walks `__baseType` chains (cycle-guarded) and copies parent members onto children tagged with `declaredOn`. This is why `XamDataGrid` shows dozens of properties although it declares few directly.
+- `type-info.json`'s per-member entries are read with regexes, so the captured strings are JSON-unescaped (System.Text.Json writes `` ` `` and `<` as ```/`<`); without that, generic names never matched and `Action<ToolCommand>` reached agents as `Action<ToolCommand>`.
+- `enrichWithInheritance()` walks `__baseTypes` chains by assembly + full name (cycle-guarded) and copies parent members onto children tagged with `declaredOn`; it only follows a base whose indexed entry IS that type, so a same-named type (chart `Axis` vs Excel `Axis`) can't leak members in. Generic bases (`DataPresenterResourceSet`1`, which holds the theme classes' static styles) are linked through their definition. This is why `XamDataGrid` shows dozens of properties although it declares few directly.
+- Static `ResourceKey`/`RoutedCommand` fields (`F:` entries marked `isField` by the extractor — brush keys, commands) are listed with the properties; other fields (enum values, `DependencyProperty` identifiers) are not.
 - Types matching `EXCLUDE_SUFFIXES` / `EXCLUDE_CONTAINS` / `EXCLUDE_PACKAGES` are dropped, as are members whose summary is literally `internal`.
+- Non-public types are dropped too. The XML docs also document internal and private nested classes (`ActivePaneManager`, `XamFunnelController`, …) that no app can use — on 26.1.21 they were 1,653 of the 6,907 pages, and search ranked some first ("active pane" → `ActivePaneManager`). The extractor lists the types reflection positively sees as non-public (`__nonPublicTypes`; a type it can't load is never listed, so a load failure can't hide public API), and `build-api.ts` skips them before short-name collisions are resolved, so 89 names that an internal class used to win now document the public class (`DashboardTileGroupDescription`). No public type inherits from a non-public one (C# forbids it), so no inherited members are lost.
 - When two types share a short name, the one documenting more members wins the file name; the others are listed in its `alternates`.
-- `ASSEMBLY_XMLNS` maps assembly → xmlns URI/prefix; unlisted assemblies get `http://schemas.infragistics.com/xaml` / `ig`. `namespaces.json` contains only `Xam*`-prefixed types.
+- `xamlNamespace`/`defaultPrefix` (and `xamlName` for nested types) come from the extractor's `__xaml`; types it has no entry for (open generics, non-public types, DLLs left out of XAML resolution) fall back to `clr-namespace:` syntax, and the build logs how many. `namespaces.json` contains only `Xam*`-prefixed types.
 
 ### `get_wpf_api_reference` size guard
 
@@ -259,7 +264,11 @@ Because inherited members are copied onto every subclass, a few hundred types (m
 2. Inherited members are listed by name only, one line per "inherited from" section (chosen over name + type: at a 25K threshold name-only gives `XamCategoryChart` 19.8K and leaves 8 types over the limit, while name + type gives 26.2K and leaves 12).
 3. All members are listed by name only (6 types that declare 250+ members themselves, e.g. `Series`, `XamDomainChart`).
 
-Section headings always stay, so every member name and its declaring type remain visible. A compacted response says so and points to the optional `member` parameter, a case-insensitive name substring that returns only the matching members, inherited ones included, in full detail. The guard applies to `member`-filtered responses as well, so a very broad filter can't bypass it. Measured over all 6,907 types of the Infragistics 26.1.21 data (re-measure after a data bump): max 71,686 → 24,863 chars, p99 58,954 → 16,717; 211 types are compacted (32 at level 1, among them `XamDataGrid` 19.0K, `XamTreeGrid` 19.0K and `XamGrid` 14.9K with every property in full; 173 at level 2, among them the charts; 6 at level 3) and all others render byte-identically to before.
+Section headings always stay, so every member name and its declaring type remain visible. A compacted response says so and points to the optional `member` parameter, a case-insensitive name substring that returns only the matching members, inherited ones included, in full detail. The guard applies to `member`-filtered responses as well, so a very broad filter can't bypass it. Measured over all 5,343 public types of the Infragistics 26.1.21 data (re-measure after a data bump): max 116,994 → 24,914 chars (`RibbonBrushKeys`, whose keys are listed as static fields), p99 58,621 → 18,007; 213 types are compacted (30 at level 1, among them `XamDataGrid` 20.5K, `XamTreeGrid` 20.5K and `XamGrid` 14.9K with every property in full; 173 at level 2, among them the charts; 10 at level 3, among them the four `…BrushKeys` classes) and all others render in full.
+
+### `get_wpf_theme_resource` paging
+
+Theme files used to be cut at 24,000 characters, and 436 of the 822 (26.1.21) are larger — up to 659K (`RibbonGeneric.xaml`) — so agents fetched them from GitHub instead. Now files up to 24,000 characters come back whole (byte-identical to before); larger ones return a contents overview (pages and the `x:Key`/`TargetType` of the entries starting on each; for the 14 files with 700+ entries just the first and last per page). `page: n` returns page n of 23,000 characters of XAML, and `find: "<text>"` returns the top-level entries whose `x:Key`, `TargetType` or element name contains it, in full, wrapped in the file's own root element (paged the same way when large). `server/Tools/XamlPages.cs` splits a file at its top-level elements (with their leading comments and indentation) using `XmlTextReader` with `Namespaces = false` (three DataPresenter files use an undeclared prefix); an element bigger than a page continues on the next at a line break, and the 76 comment-only dictionaries are paged by line. Verified over all files: every page fits in 25K, the pages concatenate to the exact file (2,674 pages), and `find` results — single- and multi-page — compile as WPF XAML.
 
 ### Two runtimes, one data set
 
@@ -269,7 +278,7 @@ Section headings always stay, so every member name and its declaring type remain
 
 | File | Size | Loaded | Purpose |
 |---|---|---|---|
-| `dist/data/namespaces.json` | ~50 KB | at startup | 191 Xam* control registry |
+| `dist/data/namespaces.json` | ~50 KB | at startup | 189 Xam* control registry |
 | `dist/data/search-index.json` | ~5 MB | at startup | compact index (`n,s,a,p,m` keys): name, summary, member names |
 | `dist/data/docs-index.json` | ~1 MB | at startup | topic slugs, titles, control names, summaries |
 | `dist/data/theme-index.json` | small | at startup | theme/style files with parsed `targetTypes` |

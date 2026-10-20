@@ -97,6 +97,7 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             if (m.IsEnum == true && m.EnumValues is { Length: > 0 })
                 line += $" — values: `{string.Join("` | `", m.EnumValues)}`";
         }
+        if (m.IsField == true) line += " _(static field)_";
         line += $": {(string.IsNullOrEmpty(m.Summary) ? "—" : m.Summary)}";
         return line;
     }
@@ -165,7 +166,7 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
     [Description(ToolDescriptions.GetWpfApiReference)]
     public CallToolResult GetApiReference(
         [Description("""
-            Any Infragistics WPF type name — 7000+ types including controls (e.g. "XamDataGrid"),
+            Any public Infragistics WPF type name — 5,300+ types including controls (e.g. "XamDataGrid"),
                   supporting types (e.g. "FieldLayout", "SummaryDefinition"), enums, strategies, indicators, and more.
                   Case-insensitive. To find a Xam* control name use list_wpf_components. To discover any other type name use search_wpf_api.
             """)]
@@ -214,13 +215,21 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             $"# {doc.Component}",
             "",
             $"**xmlns:** `xmlns:{doc.DefaultPrefix}=\"{doc.XamlNamespace}\"`",
+        };
+        if (doc.XamlName is { } xamlName)
+            output.Add($"**XAML name:** `{doc.DefaultPrefix}:{xamlName}` (nested class)");
+        // clr-namespace names the assembly, and only the .NET (8+) builds are called Infragistics.WPF.*.
+        if (doc.XamlNamespace.StartsWith("clr-namespace:", StringComparison.Ordinal) && doc.Assembly.StartsWith("Infragistics.WPF", StringComparison.Ordinal))
+            output.Add($"_.NET Framework 4.x apps: use `assembly=InfragisticsWPF{doc.Assembly["Infragistics.WPF".Length..]}` (that build's assembly name)._");
+        output.AddRange(new[]
+        {
             $"**NuGet:** `{doc.NugetPackage}`",
             $"**Assembly:** `{doc.Assembly}`",
             $"**Full type name:** `{doc.DotnetNamespace}.{doc.Component}`",
             "",
             "## Summary",
             summary,
-        };
+        });
 
         if (doc.Alternates is { Length: > 0 })
         {

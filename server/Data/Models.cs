@@ -21,7 +21,8 @@ public sealed record ApiMemberEntry(
     bool? IsNullable,
     bool? IsEnum,
     string[]? EnumValues,
-    string? DeclaredOn);
+    string? DeclaredOn,
+    bool? IsField = null);   // a static ResourceKey/RoutedCommand field, listed with the properties
 
 public sealed record AlternateType(string FullName, string NugetPackage, int MemberCount);
 
@@ -38,7 +39,8 @@ public sealed record ApiEntry(
     AlternateType[]? Alternates,
     ApiMemberEntry[] Properties,
     ApiMemberEntry[] Events,
-    ApiMemberEntry[] Methods);
+    ApiMemberEntry[] Methods,
+    string? XamlName = null);   // nested types only: "Outer+Inner"
 
 /// Compact entry in search-index.json — single-letter keys keep the ~5MB index small.
 public sealed record SearchIndexEntry(

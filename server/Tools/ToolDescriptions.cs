@@ -25,6 +25,8 @@ public static class ToolDescriptions
 
         Use after list_wpf_components (or search_wpf_api, if the exact type name isn't known yet) to resolve the component name. Also use to check whether a specific property or event exists on a known type — it returns the complete member list, including members inherited from Infragistics base classes (grouped under "inherited from `Base`" headings).
 
+        The xmlns line is resolved from the type's own assembly, so use it exactly as given — it can differ between types of one control (e.g. igDP for XamDataGrid, igThemes for DataPresenterRoyalDark, igPrim for primitives, or a clr-namespace: line). Static resource keys and commands (e.g. DockManagerBrushKeys.*, DataPresenterCommands.*) are listed with the properties, marked "(static field)" — use them via {x:Static prefix:Type.Member}. Nested classes show a "XAML name" (Outer+Inner).
+
         Large types (mostly charts and grids, whose members are largely inherited) are compacted to stay under ~25K characters, giving up detail in this order until the response fits: events and methods are listed by name only first (properties keep full detail), then inherited members, and as a last resort all members. The response then says so in an "ℹ️ Compacted" line. Every member name is always listed. For full properties only, kind: "properties" is often small enough to come back uncompacted. To get full details (type, enum values, summary) for specific members, pass member: a case-insensitive name substring, combinable with kind — e.g. get_wpf_api_reference("XamCategoryChart", member: "YAxis") returns every YAxis* member, inherited ones included. When you already know which members you need, pass member up front.
 
         If a type's own member list is unexpectedly sparse, the response names its base type — call get_wpf_api_reference again on that base type to see the rest of the inherited surface.
@@ -86,7 +88,11 @@ public static class ToolDescriptions
 
         Use the exact `path` returned by setup_wpf_theme (e.g. "Themes/MetroDark/MetroDark.xamDataChart.xaml" or "DefaultStyles/Ribbon/RibbonMetroDark.xaml") — never guess this path. This is always the second step after setup_wpf_theme, never the first call.
 
-        Use this when the user wants to customize/override part of a control's themed appearance (copy the real Style/ControlTemplate as a starting point instead of guessing property names or template structure), or wants to see exactly what a named theme changes for a given control. Large files are truncated with a note — ask for a narrower/more specific file via setup_wpf_theme if you need a part that got cut off.
+        Use this when the user wants to customize/override part of a control's themed appearance (copy the real Style/ControlTemplate as a starting point instead of guessing property names or template structure), or wants to see exactly what a named theme changes for a given control.
+
+        Nothing is cut off. Files up to ~24K characters come back whole. Larger ones (about half of them, up to ~660K) first return a contents overview: how many pages there are and which entries (x:Key or TargetType) start on each. Then either:
+          • find: "<part of an x:Key, TargetType or element name>" — just the matching Style/ControlTemplate/brush entries, each in full, wrapped in the file's own root element so its xmlns declarations come along (e.g. find: "CheckBox"). The fastest way to the one style you need. An entry may be BasedOn or reference resources in a file its MergedDictionaries list (e.g. <Theme>.Styles.xaml) — get those the same way.
+          • page: 1, 2, … — the file in order. Pages split between top-level elements (one bigger than a page continues on the next), and concatenated they are the exact file, e.g. for copying a whole theme file.
         """;
 
     public const string GetWpfThemePalette = """
