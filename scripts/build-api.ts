@@ -477,7 +477,7 @@ async function generate() {
   console.log(`Enriching inheritance...`);
   const enriched = enrichWithInheritance(entries, baseTypes);
 
-  const escaped = [...entries.values()].filter(e => /\\u00[0-9A-Fa-f]{2}/.test(JSON.stringify(e).replace(/\\\\/g, '')));
+  const escaped = [...entries.values()].filter(e => /\\\\u00[0-9A-Fa-f]{2}/.test(JSON.stringify(e)));
   assertBuildStep(escaped.length === 0,
     `${escaped.length} API entr${escaped.length === 1 ? 'y' : 'ies'} (e.g. ${escaped.slice(0, 3).map(e => e.component).join(', ')}) contain ` +
     `JSON escapes such as \\u003C as literal text — a type-info.json string was used without decode(), so agents would ` +
