@@ -37,10 +37,15 @@ public sealed class DocsTools(DataStore store, ToolLog log)
     {
         var timer = Stopwatch.StartNew();
         var input = new { query, control, limit };
+        if ((ToolInput.CheckLength("query", query, max: 128) ?? ToolInput.CheckLength("control", control, max: 64)) is { } invalid)
+        {
+            log.Write("search_wpf_docs", input, invalid, timer);
+            return ToolResult.Error(invalid);
+        }
         var tokens = SearchTools.Tokenize(query);
         var controlFilter = control?.ToLowerInvariant().Trim();
         if (string.IsNullOrEmpty(controlFilter)) controlFilter = null;
-        limit = Math.Min(limit, 50);
+        limit = Math.Clamp(limit, 1, 50);
 
         if (tokens.Length == 0 && controlFilter is null)
         {
@@ -54,12 +59,13 @@ public sealed class DocsTools(DataStore store, ToolLog log)
 
         foreach (var entry in store.DocIndex)
         {
-            // Hard pre-filter on control name: bidirectional substring match with hyphens
-            // stripped, so "FinancialChart" ~ "XamFinancialChart" and "financial-chart" both hit.
+            // Hard pre-filter on control name: bidirectional substring match with hyphens and spaces
+            // stripped, so "FinancialChart" ~ "XamFinancialChart" and "financial-chart" both hit, and
+            // "ThemeManager" ~ "IG Theme Manager".
             if (controlFilter is not null && !entry.ControlNames.Any(c =>
                 {
-                    var cNorm = c.ToLowerInvariant().Replace("-", "");
-                    var fNorm = controlFilter.Replace("-", "");
+                    var cNorm = c.ToLowerInvariant().Replace("-", "").Replace(" ", "");
+                    var fNorm = controlFilter.Replace("-", "").Replace(" ", "");
                     return cNorm.Contains(fNorm, StringComparison.Ordinal) || fNorm.Contains(cNorm, StringComparison.Ordinal);
                 }))
             {
@@ -119,7 +125,7 @@ public sealed class DocsTools(DataStore store, ToolLog log)
         var queryLabel = !string.IsNullOrEmpty(query) ? $"\"{query}\"" : "(browsing by control)";
         var text = string.Join("\n\n", new[]
             {
-                $"# WPF Documentation Search: {queryLabel} ({limited.Length} of {totalFound} matches)",
+                $"## WPF Documentation Search: {queryLabel} ({limited.Length} of {totalFound} matches)",
                 "",
             }
             .Concat(lines)
@@ -152,6 +158,11 @@ public sealed class DocsTools(DataStore store, ToolLog log)
     {
         var timer = Stopwatch.StartNew();
         var input = new { topic };
+        if (ToolInput.CheckLength("topic", topic, max: 160, min: 1) is { } invalid)
+        {
+            log.Write("get_wpf_doc", input, invalid, timer);
+            return ToolResult.Error(invalid);
+        }
 
         var doc = store.LoadDoc(topic);
         if (doc is null)
@@ -173,7 +184,7 @@ public sealed class DocsTools(DataStore store, ToolLog log)
 
         var output = new List<string>
         {
-            $"# {(string.IsNullOrEmpty(doc.Title) ? doc.Slug : doc.Title)}",
+            $"## {(string.IsNullOrEmpty(doc.Title) ? doc.Slug : doc.Title)}",
             "",
             $"**Topic slug:** `{doc.Slug}`",
             $"**Source:** {(doc.Source == "wpf" ? "docs-wpf" : "docs-common (shared cross-platform topic)")}",
@@ -184,7 +195,7 @@ public sealed class DocsTools(DataStore store, ToolLog log)
         if (doc.XamlSnippets.Length > 0)
         {
             output.Add("");
-            output.Add("## XAML Examples");
+            output.Add("### XAML Examples");
             var shown = doc.XamlSnippets.Take(MaxSnippetsShown).ToArray();
             for (var i = 0; i < shown.Length; i++)
             {
@@ -193,7 +204,7 @@ public sealed class DocsTools(DataStore store, ToolLog log)
                     ? $"{snippet[..MaxSnippetChars]}\n<!-- truncated, {snippet.Length} chars total -->"
                     : snippet;
                 output.Add("");
-                output.Add($"### Example {i + 1}");
+                output.Add($"#### Example {i + 1}");
                 output.Add("```xml");
                 output.Add(text);
                 output.Add("```");
@@ -215,7 +226,7 @@ public sealed class DocsTools(DataStore store, ToolLog log)
             ? $"{doc.Body[..MaxBodyChars]}\n\n_(truncated, {doc.Body.Length} chars total)_"
             : doc.Body;
         output.Add("");
-        output.Add("## Full Topic Text");
+        output.Add("### Full Topic Text");
         output.Add("");
         output.Add(body);
 

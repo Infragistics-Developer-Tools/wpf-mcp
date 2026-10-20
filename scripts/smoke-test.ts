@@ -13,7 +13,8 @@
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -25,6 +26,9 @@ const IS_DOTNET = process.argv.includes('--dotnet');
 const TARGET = IS_DOTNET
   ? { entry: DOTNET_DLL, command: 'dotnet', args: [DOTNET_DLL], hint: 'dotnet build server/' }
   : { entry: ENTRY, command: process.execPath, args: [ENTRY], hint: 'npm run build' };
+// Top-level heading of a tool response: the C# server uses `##` (clients render `#` as a page-sized
+// title in their tool-result panes), the frozen TS server still uses `#`.
+const H1 = IS_DOTNET ? '##' : '#';
 
 const EXPECTED_TOOLS = [
   'list_wpf_components',
@@ -92,7 +96,7 @@ async function main(): Promise<void> {
     console.log('get_wpf_api_reference');
     r = await call('get_wpf_api_reference', { component: 'XamDataGrid', kind: 'all' });
     text = textOf(r);
-    check('XamDataGrid resolves with xmlns and NuGet', !r.isError && text.startsWith('# XamDataGrid') && text.includes('xmlns:igDP=') && text.includes('Infragistics.WPF'));
+    check('XamDataGrid resolves with xmlns and NuGet', !r.isError && text.startsWith(`${H1} XamDataGrid\n`) && text.includes('xmlns:igDP=') && text.includes('Infragistics.WPF'));
     check('inherited members are grouped by base type', text.includes('(inherited from `DataPresenterBase`)'), 'no "(inherited from `DataPresenterBase`)" section — enrichWithInheritance did not run');
     // kind: properties — small enough to render every member (inherited ones included) in full.
     r = await call('get_wpf_api_reference', { component: 'XamDataGrid', kind: 'properties' });
@@ -125,7 +129,16 @@ async function main(): Promise<void> {
 
     console.log('search_wpf_api');
     r = await call('search_wpf_api', { query: 'filter', limit: 5 });
-    check('keyword search returns ranked results', !r.isError && textOf(r).includes('# WPF API Search'));
+    check('keyword search returns ranked results', !r.isError && textOf(r).startsWith(`${H1} WPF API Search`));
+    if (IS_DOTNET) {
+      // C# only: the TS server returns no results for limit <= 0 and doesn't enforce max lengths.
+      r = await call('search_wpf_api', { query: 'filter', limit: 0 });
+      check('limit 0 is clamped to 1 result', !r.isError && textOf(r).includes('(1 of '), textOf(r).slice(0, 300));
+      r = await call('search_wpf_api', { query: 'filter '.repeat(100) });
+      check('over-long query → isError naming the limit', r.isError === true && textOf(r).includes('max 128 characters'), textOf(r).slice(0, 300));
+      r = await call('search_wpf_api', { query: '   ' });
+      check('blank query → isError', r.isError === true && textOf(r).includes('must not be empty'), textOf(r).slice(0, 300));
+    }
 
     console.log('get_wpf_project_scaffold');
     r = await call('get_wpf_project_scaffold', { components: ['XamDataGrid', 'XamCategoryChart'], projectName: 'SmokeApp', framework: 'net10.0' });
@@ -143,6 +156,12 @@ async function main(): Promise<void> {
     }
     r = await call('search_wpf_docs', { query: 'column series', limit: 3 });
     check('docs-common topics resolved ({CategoryChartName} → real name)', !r.isError && /XamCategoryChart|XamDataChart/.test(textOf(r)), textOf(r).slice(0, 300));
+    if (IS_DOTNET) {
+      // C# only: the TS server strips hyphens but not spaces from control names.
+      r = await call('search_wpf_docs', { control: 'ThemeManager', limit: 50 });
+      text = textOf(r);
+      check('control "ThemeManager" matches topics tagged "IG Theme Manager"', !r.isError && text.includes('IG Theme Manager'), text.slice(0, 300));
+    }
     r = await call('get_wpf_doc', { topic: 'no-such-topic-slug' });
     check('unknown slug → isError', r.isError === true);
 
@@ -169,8 +188,36 @@ async function main(): Promise<void> {
     check('MetroDark palette has color keys', !r.isError && /Color_\d+|Brush\d+/.test(text), text.slice(0, 300));
     r = await call('get_wpf_theme_palette', {});
     check('omitting theme returns the chooser', !r.isError && textOf(r).includes('MetroDark'));
+
+    if (IS_DOTNET) {
+      console.log('stderr');
+      check('no SDK info lines without --debug', !/^info:/m.test(stderr.join('')), stderr.join('').slice(0, 300));
+    }
   } finally {
     await client.close();
+  }
+
+  if (IS_DOTNET) {
+    // C# only: a second server with --debug; parallel calls must each get a log entry. stderr is
+    // ignored, not piped: --debug turns on the SDK's info lines and an unread pipe would fill up.
+    console.log('--debug log');
+    const logPath = join(tmpdir(), `wpf-mcp-smoke-${process.pid}.log`);
+    rmSync(logPath, { force: true });
+    const env = Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined));
+    const debugClient = new Client({ name: 'wpf-mcp-smoke-test', version: '0.0.0' });
+    await debugClient.connect(new StdioClientTransport({
+      command: TARGET.command, args: [...TARGET.args, '--debug'], env: { ...env, WPF_MCP_LOG: logPath }, stderr: 'ignore',
+    }));
+    try {
+      const calls = 20;
+      await Promise.all(Array.from({ length: calls }, (_, i) =>
+        debugClient.callTool({ name: 'search_wpf_api', arguments: { query: `filter ${i}`, limit: 1 } })));
+      const entries = existsSync(logPath) ? readFileSync(logPath, 'utf8').match(/^\[[^\]]+\] search_wpf_api \(\d+ms\)$/gm)?.length ?? 0 : 0;
+      check(`${calls} parallel calls → ${calls} log entries`, entries === calls, `${entries} entries in ${logPath}`);
+    } finally {
+      await debugClient.close();
+      rmSync(logPath, { force: true });
+    }
   }
 
   const ms = Math.round(performance.now() - start);
