@@ -239,19 +239,24 @@ function loadTypeInfo(): Record<string, TypeInfoEntry | string> {
 
 /**
  * The extractor's maps keyed by "Assembly|Namespace.Type" (nested: "…|Namespace.Outer.Inner"), so types that share
- * a short name can't overwrite each other: each type's XAML namespace and prefix, and its Infragistics base type.
+ * a short name can't overwrite each other: each type's XAML namespace and prefix, its Infragistics base type, and
+ * the types and members ("…|Namespace.Type.Member") that are not public.
  */
-function loadExtractorMaps(): { xaml: Record<string, XamlTypeInfo>; baseTypes: Record<string, string>; nonPublic: Set<string> } {
+function loadExtractorMaps(): {
+  xaml: Record<string, XamlTypeInfo>; baseTypes: Record<string, string>; nonPublic: Set<string>; nonPublicMembers: Set<string>;
+} {
   const parsed = JSON.parse(readFileSync(join(ROOT, 'nuget', 'type-info.json'), 'utf-8'));
   const xaml = parsed.__xaml as Record<string, XamlTypeInfo> | undefined;
   const baseTypes = parsed.__baseTypes as Record<string, string> | undefined;
   const nonPublic = parsed.__nonPublicTypes as string[] | undefined;
-  assertBuildStep(!!xaml && Object.keys(xaml).length > 0 && !!baseTypes && Object.keys(baseTypes).length > 0 && !!nonPublic?.length,
-    `nuget/type-info.json has no "__xaml" / "__baseTypes" / "__nonPublicTypes" section — it was written by an older ` +
-    `type extractor, so every type would get a guessed xmlns, no inherited members, and internal classes would be ` +
-    `indexed as usable. Run: npm run generate:types`
+  const nonPublicMembers = parsed.__nonPublicMembers as string[] | undefined;
+  assertBuildStep(!!xaml && Object.keys(xaml).length > 0 && !!baseTypes && Object.keys(baseTypes).length > 0 &&
+    !!nonPublic?.length && !!nonPublicMembers?.length,
+    `nuget/type-info.json has no "__xaml" / "__baseTypes" / "__nonPublicTypes" / "__nonPublicMembers" section — it was ` +
+    `written by an older type extractor, so every type would get a guessed xmlns, no inherited members, and internal ` +
+    `classes and members would be indexed as usable. Run: npm run generate:types`
   );
-  return { xaml: xaml!, baseTypes: baseTypes!, nonPublic: new Set(nonPublic) };
+  return { xaml: xaml!, baseTypes: baseTypes!, nonPublic: new Set(nonPublic), nonPublicMembers: new Set(nonPublicMembers) };
 }
 
 /**
@@ -263,7 +268,8 @@ function loadExtractorMaps(): { xaml: Record<string, XamlTypeInfo>; baseTypes: R
  */
 function enrichWithInheritance(
   entries: Map<string, ApiEntry>,
-  baseTypes: Record<string, string>
+  baseTypes: Record<string, string>,
+  allTypes: Map<string, ApiEntry>
 ): number {
   let enriched = 0;
   const fullKey = (e: ApiEntry) => `${e.assembly}|${e.dotnetNamespace}.${e.component}`;
@@ -286,10 +292,11 @@ function enrichWithInheritance(
       if (visited.has(baseKey)) break;   // cycle guard
       visited.add(baseKey);
 
-      // Entries are keyed by short name; only follow it if that entry IS this base type, not a same-named one.
+      // Looked up by full name among every parsed type, not just the pages: a base that lost its short name to a
+      // same-named type (XamGrid's Cell; the "Cell" page documents the DataPresenter one) still passes its members on.
       const base = baseKey.split('.').pop()!;
-      const baseEntry = entries.get(base);
-      if (!baseEntry || fullKey(baseEntry) !== baseKey) break;
+      const baseEntry = allTypes.get(baseKey);
+      if (!baseEntry) break;
 
       for (const p of baseEntry.properties.filter(p => !p.declaredOn && !knownProps.has(p.name))) {
         entry.properties.push({ ...p, declaredOn: base });
@@ -320,8 +327,8 @@ async function generate() {
   mkdirSync(API_OUT_DIR, { recursive: true });
 
   const typeInfo = loadTypeInfo();
-  const { xaml: xamlTypes, baseTypes, nonPublic } = loadExtractorMaps();
-  let skippedNonPublic = 0;
+  const { xaml: xamlTypes, baseTypes, nonPublic, nonPublicMembers } = loadExtractorMaps();
+  let skippedNonPublic = 0, skippedNonPublicMembers = 0;
   // Prefix per xmlns, for the few types the extractor has no entry for (generics, DLLs left out of XAML resolution).
   const prefixByXmlns = new Map(Object.values(xamlTypes).map(x => [x.xmlns, x.prefix]));
   const xamlFallbacks: string[] = [];
@@ -330,6 +337,9 @@ async function generate() {
   console.log(`Scanning ${sources.length} XML documentation files...`);
 
   const entries = new Map<string, ApiEntry>();
+  // Every parsed type by "Assembly|Namespace.Type", including those that lose their short name below: the inheritance
+  // walk follows real base types, which aren't always the type that owns their name.
+  const allTypes = new Map<string, ApiEntry>();
   // Entries are keyed by short type name, but short names are not unique across
   // assemblies. Collisions are resolved case-INsensitively: type files are named after
   // the key, so on Windows "strings" and "Strings" would otherwise be written to the
@@ -337,6 +347,7 @@ async function generate() {
   // names case-insensitively, so a case-variant twin is unreachable regardless.
   const keyByLower = new Map<string, string>();
   const memberCounts = new Map<string, number>();
+  const contestCounts = new Map<string, number>();
   const alternates = new Map<string, AlternateType[]>();
 
   for (let fileIdx = 0; fileIdx < sources.length; fileIdx++) {
@@ -396,9 +407,19 @@ async function generate() {
       }
 
       const withTypeInfo = (m: RawMember) => {
-        const ti = typeInfo[`${typeName}.${m.name}`];
+        const ti = typeInfo[`${assemblyName}|${type.fullName}.${m.name}`];
         const extra = (ti && typeof ti === 'object') ? ti : {};
         return { name: m.name, summary: m.summary, ...extra };
+      };
+      // The XML docs also document members no app can call: internal / private ones (ValueEditor.InternalIsInitialized),
+      // and explicit interface implementations, whose doc names have '#' for '.' ("System#Collections#IList#Add").
+      const usable = (m: RawMember) => {
+        if (m.summary.toLowerCase() === 'internal') return false;
+        if (m.name.includes('#') || nonPublicMembers.has(`${assemblyName}|${type.fullName}.${m.name.replace(/``\d+$/, '')}`)) {
+          skippedNonPublicMembers++;
+          return false;
+        }
+        return true;
       };
 
       const entry: ApiEntry = {
@@ -413,19 +434,25 @@ async function generate() {
         remarks:        type.remarks,
         // Static key/command fields are listed with the properties: both are used the same way in XAML.
         properties: [
-          ...bucket.props.filter(m => m.summary.toLowerCase() !== 'internal').map(withTypeInfo),
-          ...bucket.fields.filter(m => m.summary.toLowerCase() !== 'internal').map(withTypeInfo)
-                          .filter(f => (f as ApiMemberEntry).isField === true),
+          ...bucket.props.filter(usable).map(withTypeInfo),
+          ...bucket.fields.filter(usable).map(withTypeInfo).filter(f => (f as ApiMemberEntry).isField === true),
         ],
         events:     bucket.events
-                           .filter(m => m.summary.toLowerCase() !== 'internal')
+                           .filter(usable)
                            .map(m => ({ name: m.name, summary: m.summary })),
         methods:    bucket.methods
-                           .filter(m => m.summary.toLowerCase() !== 'internal')
+                           .filter(usable)
                            .map(m => ({ name: m.name, summary: m.summary })),
       };
+      allTypes.set(`${assemblyName}|${type.fullName}`, entry);
 
       const memberCount = entry.properties.length + entry.events.length + entry.methods.length;
+      // Short-name contests are still decided by the count from before internal / private members were left out:
+      // with the new count, Cell, FieldChooser and RecordFilterCollection switched from the DataPresenter types to the
+      // XamGrid / XamPivotGrid / DataManager ones.
+      const documented = (ms: RawMember[]) => ms.filter(m => m.summary.toLowerCase() !== 'internal').length;
+      const contestCount = documented(bucket.props) + entry.properties.filter(p => (p as ApiMemberEntry).isField).length +
+                           documented(bucket.events) + documented(bucket.methods);
       const candidate: AlternateType = {
         fullName: type.fullName,
         nugetPackage: packageId,
@@ -438,6 +465,7 @@ async function generate() {
         entries.set(typeName, entry);
         keyByLower.set(lower, typeName);
         memberCounts.set(lower, memberCount);
+        contestCounts.set(lower, contestCount);
       } else {
         // Two different types share this short name. Discovery order is just
         // package-alphabetical, which surfaces stub types over the real control
@@ -446,7 +474,7 @@ async function generate() {
         const incumbent = entries.get(incumbentKey)!;
         if (!alternates.has(lower)) alternates.set(lower, []);
 
-        if (memberCount > memberCounts.get(lower)!) {
+        if (contestCount > contestCounts.get(lower)!) {
           alternates.get(lower)!.push({
             fullName: `${incumbent.dotnetNamespace}.${incumbent.component}`,
             nugetPackage: incumbent.nugetPackage,
@@ -456,6 +484,7 @@ async function generate() {
           entries.set(typeName, entry);
           keyByLower.set(lower, typeName);
           memberCounts.set(lower, memberCount);
+          contestCounts.set(lower, contestCount);
         } else {
           alternates.get(lower)!.push(candidate);
         }
@@ -463,7 +492,8 @@ async function generate() {
     }    console.log(`${Date.now() - t0}ms  (${members.length} members)`);
   }
 
-  console.log(`Left out ${skippedNonPublic} non-public (internal / private nested) type(s) documented in the XML.`);
+  console.log(`Left out ${skippedNonPublic} non-public (internal / private nested) type(s) documented in the XML, and ` +
+    `${skippedNonPublicMembers} member(s) of public types that are internal / private or explicit interface implementations.`);
   const genericFallbacks = xamlFallbacks.filter(n => n.includes('`')).length;
   console.log(`XAML namespaces: ${xamlFallbacks.length} type(s) fell back to clr-namespace syntax ` +
     `(${genericFallbacks} generic, ${xamlFallbacks.length - genericFallbacks} other${xamlFallbacks.length > genericFallbacks ? `: ${xamlFallbacks.filter(n => !n.includes('`')).slice(0, 8).join(', ')}` : ''})`);
@@ -475,7 +505,7 @@ async function generate() {
 
   // Enrich in-memory, then write everything at once
   console.log(`Enriching inheritance...`);
-  const enriched = enrichWithInheritance(entries, baseTypes);
+  const enriched = enrichWithInheritance(entries, baseTypes, allTypes);
 
   const escaped = [...entries.values()].filter(e => /\\\\u00[0-9A-Fa-f]{2}/.test(JSON.stringify(e)));
   assertBuildStep(escaped.length === 0,

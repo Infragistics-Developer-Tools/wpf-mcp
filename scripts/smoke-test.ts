@@ -128,6 +128,25 @@ async function main(): Promise<void> {
     text = textOf(r);
     check('public type wins its name over an internal one',
       !r.isError && text.includes('`Infragistics.Controls.Dashboards.DashboardTileGroupDescription`') && !text.includes('.Implementation.'), text.slice(0, 400));
+    // Members no app can call are not listed: internal ones (the XML docs document XamDockManager's internal
+    // FlyoutOpening event) and explicit interface implementations ("System#Windows#Controls#Primitives#IScrollInfo#…").
+    r = await call('get_wpf_api_reference', { component: 'XamDockManager', kind: 'events' });
+    text = textOf(r);
+    check('internal members are not listed', !r.isError && text.includes('**PaneDragStarting**') && !text.includes('FlyoutOpening'), text.slice(0, 300));
+    r = await call('get_wpf_api_reference', { component: 'XamCarouselPanel', kind: 'properties' });
+    check('explicit interface implementations are not listed', !r.isError && textOf(r).includes('# XamCarouselPanel') && !textOf(r).includes('IScrollInfo#'), textOf(r).slice(0, 300));
+    // Member types are looked up per exact type: the XGrid FilterOperand's Icon (a String) used to overwrite XamGrid's.
+    r = await call('get_wpf_api_reference', { component: 'DateTimeLastWeekFilterOperand', kind: 'properties' });
+    check('member types come from the exact type, not a same-named one', !r.isError && textOf(r).includes('**Icon** `DataTemplate`'), textOf(r).slice(0, 300));
+    // A base that lost its short name still passes its members on (XamGrid's Cell; the "Cell" page is the DataPresenter one).
+    r = await call('get_wpf_api_reference', { component: 'AddNewRowCell', kind: 'properties' });
+    text = textOf(r);
+    check('members are inherited from a base whose name another type owns', !r.isError && text.includes('(inherited from `Cell`)') && text.includes('**IsEditing**'), text.slice(0, 300));
+    // A type whose name another DLL's type also has under the same xmlns (XamDiagram's internal NodesManager) would fail
+    // to compile with that xmlns, so it gets clr-namespace syntax naming its own assembly.
+    r = await call('get_wpf_api_reference', { component: 'NodesManager' });
+    check('a type shadowed under its xmlns gets clr-namespace with its assembly',
+      !r.isError && textOf(r).includes('clr-namespace:Infragistics.Controls.Menus;assembly=Infragistics.WPF.Controls.Menus.XamDataTree'), textOf(r).slice(0, 300));
     if (IS_DOTNET) {
       // C# only: field label and nested-class XAML name are rendered by the C# server.
       r = await call('get_wpf_api_reference', { component: 'DataPresenterCommands', member: 'DeleteSelectedDataRecords' });
@@ -141,7 +160,7 @@ async function main(): Promise<void> {
       text = textOf(r);
       check('large type is compacted under 25K chars', !r.isError && text.length <= 25_000 && text.includes('_ℹ️ Compacted:') && text.includes('(inherited from `XamXYChart`)\n`'), `${text.length} chars`);
       // Grids: events/methods go to names first, so the (mostly inherited) properties XAML needs keep full detail.
-      for (const grid of ['XamDataGrid', 'XamGrid']) {
+      for (const grid of ['XamDataGrid', 'XamTreeGrid']) {
         r = await call('get_wpf_api_reference', { component: grid });
         text = textOf(r);
         check(`${grid} compaction keeps full property detail`,

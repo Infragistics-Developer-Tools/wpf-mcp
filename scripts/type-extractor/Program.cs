@@ -10,10 +10,11 @@
  * Output format (flat object):
  *   "__baseTypes"               : { "Assembly|Namespace.Type" : "BaseAssembly|BaseNamespace.BaseType" }
  *                                 (only for Infragistics bases; a generic base as its definition, "…ResourceSet`1")
- *   "TypeShortName.PropName"    : { typeName, isNullable, isEnum, enumValues? }          (instance and static)
- *   "TypeShortName.FieldName"   : { typeName, isNullable, isEnum, isField: true }        (static ResourceKey/RoutedCommand fields)
+ *   "Assembly|Namespace.Type.PropName"  : { typeName, isNullable, isEnum, enumValues? }    (instance and static)
+ *   "Assembly|Namespace.Type.FieldName" : { typeName, isNullable, isEnum, isField: true }  (static ResourceKey/RoutedCommand fields)
  *   "__xaml"                    : { "Assembly|Namespace.Type" (nested: "…|Namespace.Outer.Inner") : { xmlns, prefix, ns, xamlName? } }
  *   "__nonPublicTypes"          : [ "Assembly|Namespace.Type", … ]   (internal / private nested types, to leave out)
+ *   "__nonPublicMembers"        : [ "Assembly|Namespace.Type.Member", … ]   (internal / private members, to leave out)
  */
 
 using System;
@@ -128,12 +129,41 @@ Console.Error.WriteLine($"[TypeExtractor] phase 1: {knownTypes.Count} types, {en
 // Use a plain Dictionary<string, object?> — JsonSerializer serialises this cleanly
 var output = new SortedDictionary<string, object?>(StringComparer.Ordinal);
 var baseTypes = new SortedDictionary<string, string>(StringComparer.Ordinal);
+var nonPublicMembers = new SortedSet<string>(StringComparer.Ordinal);
 
 foreach (var asm in loaded) {
     foreach (var t in SafeGetTypes(asm)) {
-        if (!IsInfragisticsPublic(t)) continue;
+        var topLevel = IsInfragisticsPublic(t);
+        // IsVisible walks IsNested, which throws for types of the .NET Framework-only Exchange connector DLL.
+        bool nestedPublic;
+        try { nestedPublic = !topLevel && t.IsVisible && t.FullName!.StartsWith("Infragistics.", StringComparison.Ordinal); }
+        catch { nestedPublic = false; }
+        if (!topLevel && !nestedPublic) continue;
 
-        var shortName = t.Name;
+        // Member entries are keyed by assembly + full name like the maps below (nested types in the XML docs' form,
+        // "…|Namespace.Outer.Inner"): with a short-name key, same-named types overwrote each other's entries
+        // (the XGrid FilterOperand's Icon, a String, replaced the XamGrid one's DataTemplate).
+        var typeKey = $"{asm.GetName().Name}|{t.FullName!.Replace('+', '.')}";
+
+        // ── Members no app can use: internal, private, private protected ─────
+        // The XML docs document those too (ValueEditor.InternalIsInitialized, the XamDockManager.FlyoutOpening event).
+        // A name is listed only when no member of that name declared here is public or protected, so an overload set
+        // with one usable method stays. Explicit interface implementations ("IList.Add") are left to build-api's '#' rule.
+        // Nested public types too (DataPresenterBase.SelectedItemHolder.InternalClearSelection); the rest is top-level only.
+        try {
+            var usable = new Dictionary<string, bool>(StringComparer.Ordinal);
+            void Note(string name, bool ok) {
+                if (!name.Contains('.') && !name.StartsWith('<')) usable[name] = usable.GetValueOrDefault(name) || ok;
+            }
+            const BindingFlags declared = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance |
+                                          BindingFlags.Static | BindingFlags.DeclaredOnly;
+            foreach (var p in t.GetProperties(declared)) Note(p.Name, IsUsable(p.GetMethod) || IsUsable(p.SetMethod));
+            foreach (var e in t.GetEvents(declared)) Note(e.Name, IsUsable(e.AddMethod));
+            foreach (var m in t.GetMethods(declared)) if (!m.IsSpecialName) Note(m.Name, IsUsable(m));
+            foreach (var (name, ok) in usable) if (!ok) nonPublicMembers.Add($"{typeKey}.{name}");
+        } catch { /* skip inaccessible type: its members stay */ }
+
+        if (!topLevel) continue;
 
         // ── Base type (only emit when the base is also an Infragistics type) ──
         // A generic base such as DataPresenterResourceSet<Locator> has a FullName with type arguments;
@@ -144,7 +174,7 @@ foreach (var asm in loaded) {
             var bt = t.BaseType;
             var btDef = bt is { IsGenericType: true } ? bt.GetGenericTypeDefinition() : bt;
             if (btDef?.FullName != null && knownTypes.ContainsKey(btDef.FullName))
-                baseTypes[$"{asm.GetName().Name}|{t.FullName}"] = $"{btDef.Assembly.GetName().Name}|{btDef.FullName}";
+                baseTypes[typeKey] = $"{btDef.Assembly.GetName().Name}|{btDef.FullName}";
         } catch { /* skip */ }
 
         // ── Properties (DeclaredOnly so we don't duplicate inherited ones) ────
@@ -156,7 +186,7 @@ foreach (var asm in loaded) {
             foreach (var prop in props) {
                 try {
                     var entry = BuildPropertyEntry(prop.PropertyType);
-                    output[$"{shortName}.{prop.Name}"] = entry;
+                    output[$"{typeKey}.{prop.Name}"] = entry;
                 } catch { /* skip unparseable property */ }
             }
         } catch { /* skip inaccessible type */ }
@@ -171,14 +201,15 @@ foreach (var asm in loaded) {
                     !typeof(System.Windows.Input.RoutedCommand).IsAssignableFrom(field.FieldType)) continue;
                 var entry = BuildPropertyEntry(field.FieldType);
                 entry["isField"] = true;
-                output[$"{shortName}.{field.Name}"] = entry;
+                output[$"{typeKey}.{field.Name}"] = entry;
             }
         } catch { /* skip inaccessible type */ }
     }
 }
 
 output["__baseTypes"] = baseTypes;
-Console.Error.WriteLine($"[TypeExtractor] phase 2: {output.Count} entries, {baseTypes.Count} base types");
+output["__nonPublicMembers"] = nonPublicMembers;
+Console.Error.WriteLine($"[TypeExtractor] phase 2: {output.Count} entries, {baseTypes.Count} base types, {nonPublicMembers.Count} non-public members");
 
 // ── Non-public types ─────────────────────────────────────────────────────────
 // The XML docs also document internal and private nested classes (ActivePaneManager, XamFunnelController, …),
@@ -233,6 +264,23 @@ bool ResolvesTo(string xmlns, string xamlName, Type t) {
     catch { return false; }
 }
 
+// XamlSchemaContext ignores internal types and settles same-named public ones by assembly order, but the WPF markup
+// compiler does neither: XamDataTree's public NodesManager under http://schemas.infragistics.com/xaml fails with
+// MC3064 because XamDiagram has an internal NodesManager under the same xmlns, and the RichTextEditor/SyntaxEditor
+// twins depend on which package the app references. So an xmlns is only used if no other top-level type of that name,
+// public or not, lives in a namespace it covers; otherwise the type gets clr-namespace syntax, which names its assembly.
+var coveredBy = xmlnsDefs.GroupBy(d => d.Xmlns).ToDictionary(
+    g => g.Key, g => g.Select(d => (Asm: d.Asm.ToLowerInvariant(), d.Ns)).ToHashSet());
+// Same assemblies as the resolution above: a type of the left-out .NET Framework-only DLL can't even report IsNested.
+var topLevelByName = xamlAssemblies
+    .SelectMany(a => { try { return a.GetTypes(); } catch (ReflectionTypeLoadException ex) { return ex.Types.OfType<Type>().ToArray(); } catch { return []; } })
+    .Select(x => { try { return x.IsNested || x.FullName?.StartsWith("Infragistics.", StringComparison.Ordinal) != true ? null : x; } catch { return null; } })
+    .OfType<Type>()
+    .GroupBy(x => x.Name).ToDictionary(g => g.Key, g => g.Select(x => (Asm: x.Assembly.GetName().Name!.ToLowerInvariant(), Ns: x.Namespace ?? "")).ToList());
+bool HasRival(string xmlns, string name, string asmName, string ns) =>
+    topLevelByName.TryGetValue(name, out var same) &&
+    same.Any(x => !(x.Asm == asmName.ToLowerInvariant() && x.Ns == ns) && coveredBy[xmlns].Contains(x));
+
 var xamlTypes = new List<(string Key, string Ns, string Asm, string XamlName, string Xmlns, bool IsClr)>();
 var unresolved = 0;
 foreach (var asm in xamlAssemblies) {
@@ -249,7 +297,7 @@ foreach (var asm in xamlAssemblies) {
             .Where(d => d.Ns == ns && string.Equals(d.Asm, asmName, StringComparison.OrdinalIgnoreCase))
             .Select(d => d.Xmlns).Distinct()
             .OrderBy(x => namespacesPerXmlns[x]).ThenBy(x => x, StringComparer.Ordinal)
-            .FirstOrDefault(x => ResolvesTo(x, xamlName, t));
+            .FirstOrDefault(x => ResolvesTo(x, xamlName, t) && !HasRival(x, xamlName.Split('+')[0], asmName, ns));
         var isClr = xmlns == null;
         xmlns ??= $"clr-namespace:{ns};assembly={asmName}";
         if (isClr && !ResolvesTo(xmlns, xamlName, t)) { unresolved++; continue; }
@@ -360,6 +408,9 @@ static bool IsInfragisticsDll(string filename) {
            !filename.Contains(".Design.", StringComparison.OrdinalIgnoreCase) &&
            !filename.Contains(".resources.", StringComparison.OrdinalIgnoreCase);
 }
+
+// Callable from an app: public, or protected (from a subclass). Not internal, private or private protected.
+static bool IsUsable(MethodBase? m) => m != null && (m.IsPublic || m.IsFamily || m.IsFamilyOrAssembly);
 
 static bool IsInfragisticsPublic(Type t) =>
     t.IsPublic &&
