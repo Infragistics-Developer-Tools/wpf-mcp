@@ -148,6 +148,9 @@ if (components) {
     errors.push(`namespaces.json has ${components.length} components < ${MIN_COMPONENTS}`);
   } else if (components.some(c => !c.component || !c.xamlNamespace || !c.nugetPackage)) {
     errors.push('namespaces.json has entries missing component/xamlNamespace/nugetPackage');
+  } else if (components.some(c => c.nugetPackage === c.nugetPackage.toLowerCase())) {
+    // Lowercase means the ID came from the nuget/packages folder name, not the .nuspec <id>.
+    errors.push('namespaces.json has lowercase nugetPackage IDs (e.g. "infragistics.wpf.datagrids.trial") — build-api.ts must take the canonical casing from the .nuspec');
   } else {
     ok('data', String(components.length), 'components in namespaces.json');
   }

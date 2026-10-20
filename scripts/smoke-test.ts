@@ -131,6 +131,7 @@ async function main(): Promise<void> {
     r = await call('get_wpf_project_scaffold', { components: ['XamDataGrid', 'XamCategoryChart'], projectName: 'SmokeApp', framework: 'net10.0' });
     text = textOf(r);
     check('scaffold has dotnet commands and xmlns', !r.isError && text.includes('dotnet new') && text.includes('dotnet add') && text.includes('xmlns:'));
+    check('package IDs keep their canonical casing', text.includes('dotnet add package Infragistics.WPF.DataGrids.Trial\n'), text.slice(0, 400));
 
     console.log('search_wpf_docs / get_wpf_doc');
     r = await call('search_wpf_docs', { control: 'XamDataGrid', limit: 5 });
