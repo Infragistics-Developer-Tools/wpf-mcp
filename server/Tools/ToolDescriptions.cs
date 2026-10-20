@@ -88,7 +88,11 @@ public static class ToolDescriptions
 
         Use the exact `path` returned by setup_wpf_theme (e.g. "Themes/MetroDark/MetroDark.xamDataChart.xaml" or "DefaultStyles/Ribbon/RibbonMetroDark.xaml") — never guess this path. This is always the second step after setup_wpf_theme, never the first call.
 
-        Use this when the user wants to customize/override part of a control's themed appearance (copy the real Style/ControlTemplate as a starting point instead of guessing property names or template structure), or wants to see exactly what a named theme changes for a given control. Large files are truncated with a note — ask for a narrower/more specific file via setup_wpf_theme if you need a part that got cut off.
+        Use this when the user wants to customize/override part of a control's themed appearance (copy the real Style/ControlTemplate as a starting point instead of guessing property names or template structure), or wants to see exactly what a named theme changes for a given control.
+
+        Nothing is cut off. Files up to ~24K characters come back whole. Larger ones (about half of them, up to ~660K) first return a contents overview: how many pages there are and which entries (x:Key or TargetType) start on each. Then either:
+          • find: "<part of an x:Key, TargetType or element name>" — just the matching Style/ControlTemplate/brush entries, each in full, wrapped in the file's own root element so its xmlns declarations come along (e.g. find: "CheckBox"). The fastest way to the one style you need. An entry may be BasedOn or reference resources in a file its MergedDictionaries list (e.g. <Theme>.Styles.xaml) — get those the same way.
+          • page: 1, 2, … — the file in order. Pages split between top-level elements (one bigger than a page continues on the next), and concatenated they are the exact file, e.g. for copying a whole theme file.
         """;
 
     public const string GetWpfThemePalette = """

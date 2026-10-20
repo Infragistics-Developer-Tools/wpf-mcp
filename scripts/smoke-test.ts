@@ -13,7 +13,7 @@
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -204,8 +204,35 @@ async function main(): Promise<void> {
 
     console.log('get_wpf_theme_resource');
     if (path) {
-      r = await call('get_wpf_theme_resource', { path });
+      // C# returns an overview for files over 24K (this one is ~155K) and the XAML by page; the frozen TS server cuts it off.
+      r = await call('get_wpf_theme_resource', IS_DOTNET ? { path, page: 1 } : { path });
       check(`returns XAML for ${path}`, !r.isError && textOf(r).includes('<ResourceDictionary'));
+    }
+    if (IS_DOTNET && path) {
+      // Large theme files are no longer cut off: overview, then pages that concatenate to the exact file.
+      r = await call('get_wpf_theme_resource', { path });
+      text = textOf(r);
+      const pageCount = Number(/comes in (\d+) pages/.exec(text)?.[1] ?? 0);
+      check('large theme file returns a contents overview', !r.isError && pageCount > 1 && text.includes('## Contents') && text.length <= 25_000, text.slice(0, 300));
+      let joined = '';
+      for (let p = 1; p <= pageCount; p++) {
+        const pr = await call('get_wpf_theme_resource', { path, page: p });
+        joined += /```xml\n([\s\S]*)\n```$/.exec(textOf(pr))?.[1] ?? '\u0000';
+      }
+      const onDisk = readFileSync(join(ROOT, 'src', 'data', 'theme-resources', path), 'utf8').replace(/^﻿/, '');
+      check(`its ${pageCount} pages concatenate to the exact file`, joined === onDisk, `${joined.length} vs ${onDisk.length} chars`);
+      // 36 matches here, so the result itself takes 2 pages: the root start tag is on the first, the end tag on the last.
+      r = await call('get_wpf_theme_resource', { path, find: 'Legend' });
+      text = textOf(r);
+      const findPages = Number(/\(page 1 of (\d+)\)/.exec(text)?.[1] ?? 1);
+      let found = /```xml\n([\s\S]*)\n```$/.exec(text)?.[1] ?? '';
+      for (let p = 2; p <= findPages; p++)
+        found += /```xml\n([\s\S]*)\n```$/.exec(textOf(await call('get_wpf_theme_resource', { path, find: 'Legend', page: p })))?.[1] ?? '';
+      check('find returns matching entries in full, inside the root element',
+        !r.isError && /entr(y|ies) matching "Legend"/.test(text) && found.includes('<ResourceDictionary') && found.trimEnd().endsWith('</ResourceDictionary>'),
+        text.slice(0, 300));
+      r = await call('get_wpf_theme_resource', { path, page: pageCount + 1 });
+      check('a page past the end is a clear error', r.isError === true && textOf(r).includes('out of range'));
     }
     r = await call('get_wpf_theme_resource', { path: '../../package.json' });
     check('path traversal is rejected', r.isError === true);

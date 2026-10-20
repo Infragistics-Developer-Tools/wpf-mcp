@@ -229,9 +229,11 @@ public sealed partial class ThemeTools(DataStore store, ToolLog log)
 
     // ── get_wpf_theme_resource ───────────────────────────────────────────────
 
-    // Style files average ~60KB and can reach ~660KB; 24000 chars (~5-6k tokens) fits a
-    // full ControlTemplate while capping the largest blobs.
+    // Files up to this size come back whole, as they always have. Larger ones (436 of 822 on 26.1.21, up to 659K)
+    // used to be cut off here; now they come as a contents overview plus pages, or just the entries `find` matches.
     private const int MaxThemeFileChars = 24000;
+    // XAML per page; with the response's header this stays under the 25K get_wpf_api_reference keeps to as well.
+    private const int ThemePageChars = 23000;
 
     [McpServerTool(Name = "get_wpf_theme_resource", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description(ToolDescriptions.GetWpfThemeResource)]
@@ -242,10 +244,23 @@ public sealed partial class ThemeTools(DataStore store, ToolLog log)
                   Call setup_wpf_theme first — never guess this path.
             """)]
         [MinLength(1), MaxLength(200)]
-        string path)
+        string path,
+        [Description("""
+            Optional: return only the file's top-level entries (Style, ControlTemplate, brush, …) whose x:Key, TargetType
+                  or element name contains this text (case-insensitive), each in full, e.g. "CheckBox", "ButtonStyle", "Brush".
+                  The result is wrapped in the file's own root element, so its xmlns declarations come along.
+            """)]
+        [MaxLength(64)]
+        string? find = null,
+        [Description("""
+            Optional page number for files too large for one response (the response says how many pages there are).
+                  Pages split between top-level elements and concatenate to the exact file. Also pages through large find results.
+            """)]
+        [Range(1, 1000)]
+        int? page = null)
     {
         var timer = Stopwatch.StartNew();
-        var input = new { path };
+        var input = new { path, find, page };
 
         var content = store.LoadThemeResource(path);
         if (content is null)
@@ -271,23 +286,83 @@ public sealed partial class ThemeTools(DataStore store, ToolLog log)
             ? "_Newer family: apply via `Infragistics.Themes.ThemeManager.ApplicationTheme = new <Name>Theme();` (the IG theme's class is `IgTheme`) — do not merge this file directly into Application.Resources._"
             : "_Legacy family: the named theme is already embedded in the component assembly — set `Theme=\"...\"` on the control. Use this file to copy/override specific styles only._";
 
-        var shown = content.Length > MaxThemeFileChars
-            ? $"{content[..MaxThemeFileChars]}\n<!-- truncated, {content.Length} chars total -->"
-            : content;
-
-        var text = string.Join('\n', new[]
+        CallToolResult Respond(string text, bool isError = false)
         {
-            $"# {path}",
-            "",
-            mechanismNote,
-            "",
-            "```xml",
-            shown,
-            "```",
-        });
+            log.Write("get_wpf_theme_resource", input, text, timer);
+            return isError ? ToolResult.Error(text) : ToolResult.Text(text);
+        }
+        string Xaml(string heading, string note, string xaml) =>
+            string.Join('\n', new[] { heading, "", mechanismNote, "", note, "", "```xml", xaml, "```" });
+        string? PageError(int count) => page is { } p && (p < 1 || p > count)
+            ? $"page {p} is out of range: \"{path}\"{(find is null ? "" : $" filtered by find \"{find.Trim()}\"")} has {count} page{(count == 1 ? "" : "s")} (page: 1{(count > 1 ? $" to {count}" : "")})."
+            : null;
 
-        log.Write("get_wpf_theme_resource", input, text, timer);
-        return ToolResult.Text(text);
+        var parts = XamlPages.Parse(content);   // null for a dictionary without child elements
+        var findText = find?.Trim();
+
+        // find: only the matching top-level entries, in full, inside the file's own root element.
+        if (!string.IsNullOrEmpty(findText))
+        {
+            var matches = parts?.Entries.Where(e => e.Search.Contains(findText, StringComparison.OrdinalIgnoreCase)).ToList() ?? [];
+            if (matches.Count == 0)
+                return Respond(string.Join('\n', new[]
+                {
+                    $"# {path}", "",
+                    $"_No top-level entry in this file has an x:Key, TargetType or element name containing \"{findText}\". Call get_wpf_theme_resource(\"{path}\") without find to see what the file contains._",
+                }));
+            var matchPages = XamlPages.Paginate(
+                new[] { (parts!.Head, "") }.Concat(matches.Select(e => (e.Text, e.Label))).Append((parts.Tail, "")), ThemePageChars);
+            if (PageError(matchPages.Count) is { } findPageError) return Respond(findPageError, isError: true);
+            var n = page ?? 1;
+            return Respond(Xaml(
+                $"# {path}: {matches.Count} entr{(matches.Count == 1 ? "y" : "ies")} matching \"{findText}\"{(matchPages.Count > 1 ? $" (page {n} of {matchPages.Count})" : "")}",
+                "_The matching top-level entries in full, inside the file's own root element so its xmlns declarations come along. " +
+                "They may use other resources via StaticResource — defined in this file or in a file its MergedDictionaries list " +
+                "(e.g. an implicit style BasedOn a keyed one in <Theme>.Styles.xaml); get those the same way, by key." +
+                (matchPages.Count > 1 ? $" The matches take {matchPages.Count} pages; {(n < matchPages.Count ? $"next: page: {n + 1}." : "this is the last one.")}" : "") + "_",
+                matchPages[n - 1].Text));
+        }
+
+        // Small files: the whole file, exactly as before.
+        if (content.Length <= MaxThemeFileChars)
+        {
+            if (PageError(1) is { } smallPageError) return Respond(smallPageError, isError: true);
+            return Respond(string.Join('\n', new[] { $"# {path}", "", mechanismNote, "", "```xml", content, "```" }));
+        }
+
+        var pages = XamlPages.Paginate(
+            parts is null ? [(content, "")] : new[] { (parts.Head, "") }.Concat(parts.Entries.Select(e => (e.Text, e.Label))).Append((parts.Tail, "")),
+            ThemePageChars);
+        if (PageError(pages.Count) is { } pageError) return Respond(pageError, isError: true);
+
+        if (page is { } pageNumber)
+            return Respond(Xaml(
+                $"# {path} (page {pageNumber} of {pages.Count})",
+                $"_Pages split between top-level elements (an element bigger than a page continues on the next) and concatenate to the exact file. " +
+                $"{(pageNumber < pages.Count ? $"Next: page: {pageNumber + 1}." : "This is the last page.")}_",
+                pages[pageNumber - 1].Text));
+
+        // Large file, no page or find: an overview of what is on each page.
+        var lead = new List<string>
+        {
+            $"# {path}", "", mechanismNote, "",
+            $"_This file is {content.Length} characters, more than one response holds, so it comes in {pages.Count} pages that split between top-level elements " +
+            "(an element bigger than a page continues on the next). Read it in order with page: 1, 2, … — the pages concatenate to the exact file — " +
+            "or get specific styles, templates or brushes in full with find: \"<part of an x:Key or TargetType>\"._",
+            "", "## Contents",
+        };
+        string Label(string label) => $"`{label}`";
+        var full = pages.Select((p, i) => $"- Page {i + 1}: {(p.Labels.Count > 0 ? string.Join(", ", p.Labels.Select(Label)) : "(continued)")}").ToList();
+        var overview = string.Join('\n', lead.Concat(full));
+        if (overview.Length > MaxThemeFileChars)
+            // The full list doesn't fit (a few brush files have 700+ entries): first and last entry per page.
+            overview = string.Join('\n', lead.Concat(pages.Select((p, i) => p.Labels.Count switch
+            {
+                0 => $"- Page {i + 1}: (continued)",
+                1 => $"- Page {i + 1}: {Label(p.Labels[0])}",
+                _ => $"- Page {i + 1}: {p.Labels.Count} entries, {Label(p.Labels[0])} … {Label(p.Labels[^1])}",
+            })).Append("").Append("_The full list of entries doesn't fit here; use find to get specific ones._"));
+        return Respond(overview);
     }
 
     // ── get_wpf_theme_palette ────────────────────────────────────────────────
@@ -459,7 +534,7 @@ public sealed partial class ThemeTools(DataStore store, ToolLog log)
             - **Charts, gauges, standard controls and other controls:** copy the control's theme file and the files it merges (such as `{{{stylesFile}}}` and `{{{colorsFile}}}`) into your project, change the accent colors in the copied `{{{colorsFile}}}`, and remap that file as above. Standard WPF controls use `{{{msFile}}}`.
             - **Grid:** its theme file only wraps compiled themes. Remap it to your own dictionary that merges `<igThemes:{{{dpPrimitives}}} />` plus copies of the grid's theme files from `DefaultStyles/DataPresenter/` — `{{{dpClass}}}.xaml`, `{{{dpClass}}}_Express.xaml`, `{{{dpClass}}}_Brushes.xaml` and the `DataPresenterGeneric*.xaml` files they merge, with the `Images` folder as `Resource` items — and change the accent in the copied `{{{dpClass}}}_Brushes.xaml`. If the Excel-style filter checkboxes keep the old color (seen on IG), they are styled by the standard-controls file, `{{{msFile}}}` — remap that too.
             - **DockManager:** remap its file to a dictionary that merges `<igThemes:{{{dockPrimitives}}} />`, `<igThemes:{{{dockClass}}} />` and your brush-key overrides — no copied templates needed.
-            - Copied theme files must be re-copied on every Infragistics upgrade. `get_wpf_theme_resource` returns them, but files over 24,000 characters are cut off; the full sources are in the Infragistics/wpf-resources repository on GitHub.
+            - Copied theme files must be re-copied on every Infragistics upgrade. `get_wpf_theme_resource` returns them completely: large files come in pages that concatenate to the exact file (page: 1, 2, …), and find: "<x:Key or TargetType>" returns single entries in full.
 
             _Read-only tool: it returns the theme's real keys and verified steps; it does not modify your project._
             """;
