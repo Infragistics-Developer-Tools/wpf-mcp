@@ -55,7 +55,7 @@ const EXCLUDE_CONTAINS = ['Internal', '<>', 'AnonymousType'];
 
 // XamXGrid is public and used internally for xplat components, but may
 // become customer-facing later, so this is a plain omission, not a "deprecated" label.
-const EXCLUDE_PACKAGES = ['infragistics.wpf.controls.grids.xamxgrid.trial'];
+const EXCLUDE_PACKAGES = ['infragistics.wpf.controls.grids.xamxgrid.trial']; // compared lowercase
 
 function shouldExclude(typeName: string): boolean {
   return (
@@ -127,6 +127,19 @@ const TFM_PREF = ['net10.0-windows7.0', 'net9.0-windows7.0', 'net8.0-windows7.0'
 
 interface XmlSource { xmlPath: string; packageId: string }
 
+// nuget/packages/ is NuGet's global-packages layout, whose folder names are the lowercased ID.
+// The .nuspec keeps the canonical casing ("Infragistics.WPF.DataGrids.Trial"), which is what
+// agents copy into a user's .csproj via `dotnet add package`.
+function readPackageId(versionDir: string, folderName: string): string {
+  const nuspec = join(versionDir, `${folderName}.nuspec`);
+  const id = existsSync(nuspec) ? /<id>\s*([^<\s]+)\s*<\/id>/.exec(readFileSync(nuspec, 'utf8'))?.[1] : undefined;
+  assertBuildStep(id?.toLowerCase() === folderName,
+    `${nuspec}: expected an <id> matching the folder name "${folderName}", got ${id ? `"${id}"` : 'none'} — ` +
+    `partial/failed restore? Re-run: npm run docs:restore`
+  );
+  return id!;
+}
+
 function discoverXmlFiles(): XmlSource[] {
   if (!existsSync(PACKAGES_DIR)) {
     console.error('nuget/packages/ not found. Run: npm run docs:restore');
@@ -143,6 +156,7 @@ function discoverXmlFiles(): XmlSource[] {
     const versions = readdirSync(pkgDir).sort(byVersionDesc);
     if (!versions.length) continue;
     const versionDir = join(pkgDir, versions[0]);
+    const packageId = readPackageId(versionDir, pkgName);
 
     for (const tfm of TFM_PREF) {
       const libDir = join(versionDir, 'lib', tfm);
@@ -153,7 +167,7 @@ function discoverXmlFiles(): XmlSource[] {
         const xmlPath = join(libDir, f);
         if (!seen.has(xmlPath)) {
           seen.add(xmlPath);
-          sources.push({ xmlPath, packageId: pkgName });
+          sources.push({ xmlPath, packageId });
         }
       }
       break; // use best matching TFM per package
@@ -319,7 +333,7 @@ async function generate() {
 
   const typeInfo = loadTypeInfo();
   const discovered = discoverXmlFiles();
-  const sources = discovered.filter(s => !EXCLUDE_PACKAGES.includes(s.packageId));
+  const sources = discovered.filter(s => !EXCLUDE_PACKAGES.includes(s.packageId.toLowerCase()));
   console.log(`Scanning ${sources.length} XML documentation files...`);
 
   const entries = new Map<string, ApiEntry>();
