@@ -38,8 +38,13 @@ public sealed partial class SearchTools(DataStore store, ToolLog log)
     {
         var timer = Stopwatch.StartNew();
         var input = new { query, limit };
+        if (ToolInput.CheckLength("query", query, max: 128, min: 1) is { } invalid)
+        {
+            log.Write("search_wpf_api", input, invalid, timer);
+            return ToolResult.Error(invalid);
+        }
         var tokens = Tokenize(query);
-        limit = Math.Min(limit, 50);
+        limit = Math.Clamp(limit, 1, 50);
 
         var results = new List<(string typeName, string summary, string nugetPackage, string matchedOn, int score)>();
 
@@ -86,7 +91,7 @@ public sealed partial class SearchTools(DataStore store, ToolLog log)
 
         var text = string.Join("\n\n", new[]
             {
-                $"# WPF API Search: \"{query}\" ({limited.Length} of {totalFound} matches)",
+                $"## WPF API Search: \"{query}\" ({limited.Length} of {totalFound} matches)",
                 "",
             }
             .Concat(lines)
