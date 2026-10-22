@@ -121,6 +121,11 @@ async function main(): Promise<void> {
         text.slice(0, 300));
       r = await call('get_wpf_api_reference', { component: 'XamCategoryChart', member: 'NoSuchMemberXyz' });
       check('member filter with no match explains instead of erroring', !r.isError && textOf(r).includes('No members whose name contains "NoSuchMemberXyz"'));
+      // A full member name must fit the limit: RibbonBrushKeys' static keys run to 74 characters.
+      r = await call('get_wpf_api_reference', { component: 'XamCategoryChart', member: 'x'.repeat(128) });
+      check('member filter accepts 128 characters', !r.isError && textOf(r).includes('No members whose name contains'), textOf(r).slice(0, 200));
+      r = await call('get_wpf_api_reference', { component: 'XamCategoryChart', member: 'x'.repeat(129) });
+      check('member over 128 characters → isError naming the limit', r.isError === true && textOf(r).includes('max 128 characters'), textOf(r).slice(0, 200));
     }
     r = await call('get_wpf_api_reference', { component: 'xamdatagrid', kind: 'events' });
     check('case-insensitive lookup + kind filter', !r.isError && textOf(r).includes('# XamDataGrid'));

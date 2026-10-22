@@ -184,12 +184,12 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
                   Examples: "YAxis" (every YAxis* member), "FieldLayout", "Changed". Use it to check specific members on a large type,
                   or to get details of members a compacted response lists by name only.
             """)]
-        [MaxLength(64)]
+        [MaxLength(128)]
         string? member = null)
     {
         var timer = Stopwatch.StartNew();
         var input = new { component, kind = kind.ToString(), member };
-        if ((ToolInput.CheckLength("component", component, max: 128, min: 1) ?? ToolInput.CheckLength("member", member, max: 64)) is { } invalid)
+        if ((ToolInput.CheckLength("component", component, max: 128, min: 1) ?? ToolInput.CheckLength("member", member, max: 128)) is { } invalid)
         {
             log.Write("get_wpf_api_reference", input, invalid, timer);
             return ToolResult.Error(invalid);
