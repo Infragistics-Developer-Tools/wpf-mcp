@@ -14,7 +14,7 @@ public sealed partial class ThemeTools(DataStore store, ToolLog log)
     // ── setup_wpf_theme ──────────────────────────────────────────────────────
 
     private const string NewerMechanismLine =
-        "_Newer family (`Themes/`): apply via `Infragistics.Themes.ThemeManager.ApplicationTheme = new <Name>Theme();` in App.xaml.cs (requires the `Infragistics.WPF.Themes.<Name>.Trial` NuGet package). Do NOT merge these files directly into `Application.Resources`._";
+        "_Newer family (`Themes/`): apply via `Infragistics.Themes.ThemeManager.ApplicationTheme = new <Name>Theme();` in App.xaml.cs (the IG theme's class is `IgTheme`; requires the `Infragistics.WPF.Themes.<Name>.Trial` NuGet package). Do NOT merge these files directly into `Application.Resources`._";
 
     private const string LegacyMechanismLine =
         "_Legacy family (`DefaultStyles/`): the named theme is already embedded in the component's assembly — just set `Theme=\"<Name>\"` on the control. Use these files only to copy/override individual Styles/ControlTemplates._";
@@ -32,10 +32,15 @@ public sealed partial class ThemeTools(DataStore store, ToolLog log)
         "dotnet add package Infragistics.WPF.Themes.<Name>.Trial",
         "```",
         "```csharp",
-        "// App.xaml.cs — set before the first window is created",
+        "// App.xaml.cs — set before the first window is created (the IG theme's class is IgTheme)",
         "Infragistics.Themes.ThemeManager.ApplicationTheme = new Infragistics.Themes.<Name>Theme();",
         "```",
     });
+
+    // ThemeManager theme classes are "<folder>Theme" (MetroDarkTheme, RoyalDarkTheme, …) except IG,
+    // whose class is IgTheme: `new IGTheme()` fails with CS0234 (verified by compiling, 26.1.54).
+    private static string ThemeClassName(string theme) =>
+        string.Equals(theme, "IG", StringComparison.OrdinalIgnoreCase) ? "IgTheme" : $"{theme}Theme";
 
     private static string NewerApplyBlock(string theme) => string.Join('\n', new[]
     {
@@ -48,7 +53,7 @@ public sealed partial class ThemeTools(DataStore store, ToolLog log)
         "// App.xaml.cs — set before the first window is created",
         "protected override void OnStartup(StartupEventArgs e)",
         "{",
-        $"    Infragistics.Themes.ThemeManager.ApplicationTheme = new Infragistics.Themes.{theme}Theme();",
+        $"    Infragistics.Themes.ThemeManager.ApplicationTheme = new Infragistics.Themes.{ThemeClassName(theme)}();",
         "    base.OnStartup(e);",
         "}",
         "```",
@@ -224,9 +229,11 @@ public sealed partial class ThemeTools(DataStore store, ToolLog log)
 
     // ── get_wpf_theme_resource ───────────────────────────────────────────────
 
-    // Style files average ~60KB and can reach ~660KB; 24000 chars (~5-6k tokens) fits a
-    // full ControlTemplate while capping the largest blobs.
+    // Files up to this size come back whole, as they always have. Larger ones (436 of 822 on 26.1.21, up to 659K)
+    // used to be cut off here; now they come as a contents overview plus pages, or just the entries `find` matches.
     private const int MaxThemeFileChars = 24000;
+    // XAML per page; with the response's header this stays under the 25K get_wpf_api_reference keeps to as well.
+    private const int ThemePageChars = 23000;
 
     [McpServerTool(Name = "get_wpf_theme_resource", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description(ToolDescriptions.GetWpfThemeResource)]
@@ -237,10 +244,23 @@ public sealed partial class ThemeTools(DataStore store, ToolLog log)
                   Call setup_wpf_theme first — never guess this path.
             """)]
         [MinLength(1), MaxLength(200)]
-        string path)
+        string path,
+        [Description("""
+            Optional: return only the file's top-level entries (Style, ControlTemplate, brush, …) whose x:Key, TargetType
+                  or element name contains this text (case-insensitive), each in full, e.g. "CheckBox", "ButtonStyle", "Brush".
+                  The result is wrapped in the file's own root element, so its xmlns declarations come along.
+            """)]
+        [MaxLength(64)]
+        string? find = null,
+        [Description("""
+            Optional page number for files too large for one response (the response says how many pages there are).
+                  Pages split between top-level elements and concatenate to the exact file. Also pages through large find results.
+            """)]
+        [Range(1, 1000)]
+        int? page = null)
     {
         var timer = Stopwatch.StartNew();
-        var input = new { path };
+        var input = new { path, find, page };
 
         var content = store.LoadThemeResource(path);
         if (content is null)
@@ -263,26 +283,86 @@ public sealed partial class ThemeTools(DataStore store, ToolLog log)
 
         var isNewerFamily = path.Replace('\\', '/').StartsWith("Themes/", StringComparison.Ordinal);
         var mechanismNote = isNewerFamily
-            ? "_Newer family: apply via `Infragistics.Themes.ThemeManager.ApplicationTheme = new <Name>Theme();` — do not merge this file directly into Application.Resources._"
+            ? "_Newer family: apply via `Infragistics.Themes.ThemeManager.ApplicationTheme = new <Name>Theme();` (the IG theme's class is `IgTheme`) — do not merge this file directly into Application.Resources._"
             : "_Legacy family: the named theme is already embedded in the component assembly — set `Theme=\"...\"` on the control. Use this file to copy/override specific styles only._";
 
-        var shown = content.Length > MaxThemeFileChars
-            ? $"{content[..MaxThemeFileChars]}\n<!-- truncated, {content.Length} chars total -->"
-            : content;
-
-        var text = string.Join('\n', new[]
+        CallToolResult Respond(string text, bool isError = false)
         {
-            $"# {path}",
-            "",
-            mechanismNote,
-            "",
-            "```xml",
-            shown,
-            "```",
-        });
+            log.Write("get_wpf_theme_resource", input, text, timer);
+            return isError ? ToolResult.Error(text) : ToolResult.Text(text);
+        }
+        string Xaml(string heading, string note, string xaml) =>
+            string.Join('\n', new[] { heading, "", mechanismNote, "", note, "", "```xml", xaml, "```" });
+        string? PageError(int count) => page is { } p && (p < 1 || p > count)
+            ? $"page {p} is out of range: \"{path}\"{(find is null ? "" : $" filtered by find \"{find.Trim()}\"")} has {count} page{(count == 1 ? "" : "s")} (page: 1{(count > 1 ? $" to {count}" : "")})."
+            : null;
 
-        log.Write("get_wpf_theme_resource", input, text, timer);
-        return ToolResult.Text(text);
+        var parts = XamlPages.Parse(content);   // null for a dictionary without child elements
+        var findText = find?.Trim();
+
+        // find: only the matching top-level entries, in full, inside the file's own root element.
+        if (!string.IsNullOrEmpty(findText))
+        {
+            var matches = parts?.Entries.Where(e => e.Search.Contains(findText, StringComparison.OrdinalIgnoreCase)).ToList() ?? [];
+            if (matches.Count == 0)
+                return Respond(string.Join('\n', new[]
+                {
+                    $"# {path}", "",
+                    $"_No top-level entry in this file has an x:Key, TargetType or element name containing \"{findText}\". Call get_wpf_theme_resource(\"{path}\") without find to see what the file contains._",
+                }));
+            var matchPages = XamlPages.Paginate(
+                new[] { (parts!.Head, "") }.Concat(matches.Select(e => (e.Text, e.Label))).Append((parts.Tail, "")), ThemePageChars);
+            if (PageError(matchPages.Count) is { } findPageError) return Respond(findPageError, isError: true);
+            var n = page ?? 1;
+            return Respond(Xaml(
+                $"# {path}: {matches.Count} entr{(matches.Count == 1 ? "y" : "ies")} matching \"{findText}\"{(matchPages.Count > 1 ? $" (page {n} of {matchPages.Count})" : "")}",
+                "_The matching top-level entries in full, inside the file's own root element so its xmlns declarations come along. " +
+                "They may use other resources via StaticResource — defined in this file or in a file its MergedDictionaries list " +
+                "(e.g. an implicit style BasedOn a keyed one in <Theme>.Styles.xaml); get those the same way, by key." +
+                (matchPages.Count > 1 ? $" The matches take {matchPages.Count} pages; {(n < matchPages.Count ? $"next: page: {n + 1}." : "this is the last one.")}" : "") + "_",
+                matchPages[n - 1].Text));
+        }
+
+        // Small files: the whole file, exactly as before.
+        if (content.Length <= MaxThemeFileChars)
+        {
+            if (PageError(1) is { } smallPageError) return Respond(smallPageError, isError: true);
+            return Respond(string.Join('\n', new[] { $"# {path}", "", mechanismNote, "", "```xml", content, "```" }));
+        }
+
+        var pages = XamlPages.Paginate(
+            parts is null ? [(content, "")] : new[] { (parts.Head, "") }.Concat(parts.Entries.Select(e => (e.Text, e.Label))).Append((parts.Tail, "")),
+            ThemePageChars);
+        if (PageError(pages.Count) is { } pageError) return Respond(pageError, isError: true);
+
+        if (page is { } pageNumber)
+            return Respond(Xaml(
+                $"# {path} (page {pageNumber} of {pages.Count})",
+                $"_Pages split between top-level elements (an element bigger than a page continues on the next) and concatenate to the exact file. " +
+                $"{(pageNumber < pages.Count ? $"Next: page: {pageNumber + 1}." : "This is the last page.")}_",
+                pages[pageNumber - 1].Text));
+
+        // Large file, no page or find: an overview of what is on each page.
+        var lead = new List<string>
+        {
+            $"# {path}", "", mechanismNote, "",
+            $"_This file is {content.Length} characters, more than one response holds, so it comes in {pages.Count} pages that split between top-level elements " +
+            "(an element bigger than a page continues on the next). Read it in order with page: 1, 2, … — the pages concatenate to the exact file — " +
+            "or get specific styles, templates or brushes in full with find: \"<part of an x:Key or TargetType>\"._",
+            "", "## Contents",
+        };
+        string Label(string label) => $"`{label}`";
+        var full = pages.Select((p, i) => $"- Page {i + 1}: {(p.Labels.Count > 0 ? string.Join(", ", p.Labels.Select(Label)) : "(continued)")}").ToList();
+        var overview = string.Join('\n', lead.Concat(full));
+        if (overview.Length > MaxThemeFileChars)
+            // The full list doesn't fit (a few brush files have 700+ entries): first and last entry per page.
+            overview = string.Join('\n', lead.Concat(pages.Select((p, i) => p.Labels.Count switch
+            {
+                0 => $"- Page {i + 1}: (continued)",
+                1 => $"- Page {i + 1}: {Label(p.Labels[0])}",
+                _ => $"- Page {i + 1}: {p.Labels.Count} entries, {Label(p.Labels[0])} … {Label(p.Labels[^1])}",
+            })).Append("").Append("_The full list of entries doesn't fit here; use find to get specific ones._"));
+        return Respond(overview);
     }
 
     // ── get_wpf_theme_palette ────────────────────────────────────────────────
@@ -361,40 +441,126 @@ public sealed partial class ThemeTools(DataStore store, ToolLog log)
             .Select(t => (t.theme, t.file!))
             .ToArray();
 
-    private static readonly string PaletteGuidance = string.Join('\n', new[]
+    // ── recolor guidance ─────────────────────────────────────────────────────
+    // Verified in test apps (Infragistics 26.1.54; RoyalDark and IG; chart, grid, gauge, DockManager,
+    // standard WPF controls): overriding palette keys never recolors a ThemeManager theme — each theme
+    // file merges its own copy of <Theme>.Theme.Colors.xaml and resolves it with StaticResource, and
+    // ThemeManager appends its dictionary after the app's. Control-level overrides and an extended
+    // theme (ThemeBase subclass remapping files) do work.
+
+    [GeneratedRegex(@"<igThemes:([A-Za-z0-9]+)\s*/>")]
+    private static partial Regex CompiledThemeClassTag();
+
+    /// The compiled theme class a ThemeManager wrapper file merges, read from the file itself so the
+    /// per-theme names stay exact: `DataPresenterRoyalDark`, but `DataPresenterIGTheme` for IG.
+    private string? CompiledThemeClass(ThemeResourceFile[] files, string fileSuffix, string classPrefix)
     {
-        "## How to apply a re-tuned palette",
-        "",
-        "These keys are the single re-color surface for the **newer \"Infragistics.Controls.*\" family** (charts, gauges, etc.) applied via `Infragistics.Themes.ThemeManager`. To recolor the theme WITHOUT creating a new theme, override just the keys you want in your own `ResourceDictionary` and merge it into the theme load — do NOT invent new keys or rename existing ones.",
-        "",
-        "⚠️ **Load-order matters.** The theme references these colors from compiled BAML primitives via `StaticResource` (resolved once at parse time), so merging an override dictionary *after* the theme has already loaded may NOT recolor already-styled controls. Merge your override so it is present BEFORE `ThemeManager.ApplicationTheme` is set / before the first themed window is created (e.g. in `App.xaml.cs` before `base.OnStartup`).",
-        "",
-        "⚠️ **Newer family only.** Legacy \"Infragistics.Windows.*\" controls (XamDataGrid, XamRibbon, XamDockManager, ...) do NOT read this palette — their themes are embedded BAML applied via `Theme=\"...\"`. Recolor those by copying individual Styles/ControlTemplates (see `setup_wpf_theme` / `get_wpf_theme_resource`).",
-        "",
-        "_This is a read-only introspection tool — it returns the real keys/values and a skeleton to copy; it does not modify your project._",
-    });
+        var file = files.FirstOrDefault(f => f.File.EndsWith(fileSuffix, StringComparison.OrdinalIgnoreCase));
+        var xaml = file is null ? null : store.LoadThemeResource(file.Path);
+        return xaml is null ? null : CompiledThemeClassTag().Matches(xaml)
+            .Select(m => m.Groups[1].Value)
+            .FirstOrDefault(n => n.StartsWith(classPrefix, StringComparison.Ordinal) && !n.EndsWith("Brushes", StringComparison.Ordinal));
+    }
+
+    /// `<theme><suffix>` as the file is actually named in the theme folder.
+    private static string ThemeFile(ThemeResourceFile[] files, string theme, string suffix) =>
+        files.FirstOrDefault(f => f.File.Equals(theme + suffix, StringComparison.OrdinalIgnoreCase))?.File ?? theme + suffix;
+
+    private string RecolorGuidance(string theme, ThemeResourceFile[] files)
+    {
+        var themeClass = ThemeClassName(theme);
+        var dpClass = CompiledThemeClass(files, ".xamDataPresenter.xaml", "DataPresenter") ?? $"DataPresenter{theme}";
+        var dpPrimitives = CompiledThemeClass(files, ".xamDataPresenter.xaml", "Primitives") ?? $"Primitives{theme}";
+        var dockClass = CompiledThemeClass(files, ".xamDockManager.xaml", "DockManager") ?? $"DockManager{theme}";
+        var dockPrimitives = CompiledThemeClass(files, ".xamDockManager.xaml", "Primitives") ?? dpPrimitives;
+        var colorsFile = ThemeFile(files, theme, ".Theme.Colors.xaml");
+        var stylesFile = ThemeFile(files, theme, ".Styles.xaml");
+        var chartFile = ThemeFile(files, theme, ".xamDataChart.xaml");
+        var msFile = ThemeFile(files, theme, ".MSControls.Core.Implicit.xaml");
+
+        return $$$"""
+            ## How to recolor {{{theme}}} (verified)
+
+            Read the palette above as a **map** of which color plays which role, and use it to pick matching replacement colors. **Overriding these keys does not recolor the theme**: every theme file merges its own private copy of `{{{colorsFile}}}` and resolves the keys against it, and ThemeManager adds its dictionary after the app's resources. Verified in test apps on RoyalDark and IG for charts, grids, gauges, DockManager and standard WPF controls; all ThemeManager themes are built the same way.
+
+            **Never works**
+            - Overriding the palette keys (`Color_…`, `Brush01`–`Brush05`): the theme files never read your copy.
+            - Putting overrides in a ResourceDictionary that App.xaml merges (`Application.Resources.MergedDictionaries`): ThemeManager's dictionary is added after it and wins.
+            - ResourceWasher: it tints every color (backgrounds too), can't hit an exact brand color, and crashes on the compiled grid theme. The Infragistics Color Tuner only generates ResourceWashers merged in App.xaml, so it doesn't work either.
+
+            **Where overrides work:** on the control itself, in the control's or window's `Resources`, or in a dictionary added in code **after** the theme is set (verified for the gauge, standard controls and DockManager):
+            ```csharp
+            Infragistics.Themes.ThemeManager.ApplicationTheme = new Infragistics.Themes.{{{themeClass}}}();
+            Resources.MergedDictionaries.Add(new ResourceDictionary { Source = new Uri("BrandColors.xaml", UriKind.Relative) });
+            ```
+            For the grid and DockManager, overrides placed directly in `Application.Resources` (not in a merged dictionary) work too.
+
+            ### Recolor specific controls
+            - **Chart (`XamCategoryChart`):** set `Brushes` and `Outlines` (each an `ig:BrushCollection`) on the chart.
+            - **Grid (`XamDataGrid`):** Styles based on the theme's own grid styles, in the grid's `Resources` or directly in `Application.Resources`:
+              ```xml
+              <!-- xmlns:igThemes="http://infragistics.com/Themes" -->
+              <Style TargetType="igDP:CellValuePresenter" BasedOn="{x:Static igThemes:{{{dpClass}}}.CellValuePresenter}">
+                <Setter Property="BackgroundSelected" Value="#FF005BA0" />
+                <Setter Property="BackgroundActive" Value="#FF005BA0" />
+                <Setter Property="BackgroundFieldSelected" Value="#FF005BA0" />
+              </Style>
+              <Style TargetType="igDP:DataRecordCellArea" BasedOn="{x:Static igThemes:{{{dpClass}}}.DataRecordCellArea}">
+                <Setter Property="BackgroundSelected" Value="#FF005BA0" />
+                <Setter Property="BackgroundActive" Value="#FF005BA0" />
+              </Style>
+              ```
+              Excel-style filter checkboxes need their own implicit `HierarchicalDataTemplate DataType="{x:Type igDP:RecordFilterTreeItem}"` with a CheckBox style. Check the text contrast too: light themes such as IG keep dark selected text, so also set `ForegroundSelectedStyle`, `ForegroundActiveStyle` and (on `CellValuePresenter`) `ForegroundFieldSelectedStyle` to a style with a readable `TextBlock.Foreground`.
+            - **DockManager:** override its brush keys (`igDock:DockManagerBrushKeys`, xmlns `http://infragistics.com/DockManager`) app-wide — directly in `Application.Resources` or in a dictionary added after the theme. On RoyalDark, `TabbedDocumentActiveOuterBorderFillKey` draws the selected tab line and `MenuItemCheckmarkBoxHottrackCenterFillKey` the checked menu item; every key and its color is in `DefaultStyles/DockManager/{{{dockClass}}}_Brushes.xaml`. Overrides on the `XamDockManager` itself miss floating windows.
+            - **Gauge (`XamRadialGauge`):** set `RangeBrushes` on the gauge. For an app-wide gauge Style (`BasedOn="{StaticResource {x:Type ig:XamRadialGauge}}"`), load the gauge type right after setting the theme — `System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof(Infragistics.Controls.Gauges.XamRadialGauge).TypeHandle);` — or the gauge silently loses the theme.
+            - **Standard WPF controls (Button, CheckBox, RadioButton, ListBoxItem, TextBox):** re-declaring the theme's brush keys near the control does nothing — the templates hold frozen brushes. Copy the control's template from `{{{stylesFile}}}` with the accent brushes swapped, or use the extended theme below. A `ProgressBar` only needs `Foreground`. A Button shows the accent only when focused or pressed.
+
+            ### Recolor the whole app (extended theme)
+            Subclass the theme and point ThemeManager at copied, recolored theme files:
+            ```csharp
+            public class BrandTheme : Infragistics.Themes.{{{themeClass}}}
+            {
+                protected override void ConfigureControlMappings()
+                {
+                    base.ConfigureControlMappings();
+                    var chart = BuildLocationString(typeof(BrandTheme).Assembly.FullName, "/Themes/Brand/{{{chartFile}}}");
+                    foreach (var key in Mappings.Keys.ToList())
+                        if (Mappings[key].EndsWith("{{{chartFile}}}", StringComparison.OrdinalIgnoreCase)) // compare case-insensitively: registered names can differ in case
+                            Mappings[key] = chart;
+                }
+            }
+            // App.xaml.cs: Infragistics.Themes.ThemeManager.ApplicationTheme = new BrandTheme();
+            ```
+            - **Charts, gauges, standard controls and other controls:** copy the control's theme file and the files it merges (such as `{{{stylesFile}}}` and `{{{colorsFile}}}`) into your project, change the accent colors in the copied `{{{colorsFile}}}`, and remap that file as above. Standard WPF controls use `{{{msFile}}}`.
+            - **Grid:** its theme file only wraps compiled themes. Remap it to your own dictionary that merges `<igThemes:{{{dpPrimitives}}} />` plus copies of the grid's theme files from `DefaultStyles/DataPresenter/` — `{{{dpClass}}}.xaml`, `{{{dpClass}}}_Express.xaml`, `{{{dpClass}}}_Brushes.xaml` and the `DataPresenterGeneric*.xaml` files they merge, with the `Images` folder as `Resource` items — and change the accent in the copied `{{{dpClass}}}_Brushes.xaml`. If the Excel-style filter checkboxes keep the old color (seen on IG), they are styled by the standard-controls file, `{{{msFile}}}` — remap that too.
+            - **DockManager:** remap its file to a dictionary that merges `<igThemes:{{{dockPrimitives}}} />`, `<igThemes:{{{dockClass}}} />` and your brush-key overrides — no copied templates needed.
+            - Copied theme files must be re-copied on every Infragistics upgrade. `get_wpf_theme_resource` returns them completely: large files come in pages that concatenate to the exact file (page: 1, 2, …), and find: "<x:Key or TargetType>" returns single entries in full.
+
+            _Read-only tool: it returns the theme's real keys and verified steps; it does not modify your project._
+            """;
+    }
 
     private static string BuildPaletteChooser(IEnumerable<string> themeNames) => string.Join('\n', new[]
         {
             "# WPF Theme Palettes — pick a base theme",
             "",
-            "These newer-family (ThemeManager) themes expose a re-tunable color palette:",
+            "These ThemeManager themes have a color palette:",
             "",
         }
         .Concat(themeNames.Select(t => $"- `{t}`"))
         .Concat(new[]
         {
             "",
-            "## To re-color WITHOUT knowing the theme name",
+            "## To recolor WITHOUT knowing the theme name",
             "",
             "1. **Detect the theme the app already uses** from the workspace, in priority order:",
-            "   - `App.xaml.cs` → `Infragistics.Themes.ThemeManager.ApplicationTheme = new <Name>Theme();`",
+            "   - `App.xaml.cs` → `Infragistics.Themes.ThemeManager.ApplicationTheme = new <Name>Theme();` (the IG theme's class is `IgTheme`)",
             "   - the `.csproj` → an `Infragistics.WPF.Themes.<Name>.Trial` PackageReference",
             "   - XAML → a `Theme=\"<Name>\"` attribute",
             "2. If you cannot detect it, **ask the user** which base theme they want — or simply whether they want a **dark** base (e.g. `MetroDark`, `RoyalDark`) or a **light** base (e.g. `Office2013`, `RoyalLight`, `Metro`, `IG`). _This tool cannot classify dark/light automatically — the palette files are not consistent enough to derive it reliably._",
-            "3. Call `get_wpf_theme_palette(theme)` with the chosen name to get its keys + a ready-to-merge override skeleton.",
+            "3. Call `get_wpf_theme_palette(theme)` with the chosen name to get its colors plus the verified recolor steps for that theme.",
             "",
-            "_Concrete colors the user gives (e.g. \"neon purple\") are mapped to hex and assigned to the returned accent/chart-series keys by you — the tool only supplies the grounded keys._",
+            "_Overriding the palette keys does not recolor a theme; the steps returned in step 3 say what does. Concrete colors the user gives (e.g. \"neon purple\") are mapped to hex by you — use the palette to see which colors play which role._",
         }));
 
     [McpServerTool(Name = "get_wpf_theme_palette", ReadOnly = true, Idempotent = true, OpenWorld = false)]
@@ -403,11 +569,12 @@ public sealed partial class ThemeTools(DataStore store, ToolLog log)
         [Description("""
             A newer-family (ThemeManager) theme name, e.g. "MetroDark", "RoyalDark", "RoyalLight",
                   "Office2013", "Office2010Blue", "Metro", "IG". Case-insensitive; a substring is accepted.
-                  Returns that theme's centralized color/brush palette (its `<Theme>.Theme.Colors.xaml`) so you can
-                  re-color the theme by overriding existing keys — NOT create a new theme.
+                  Returns that theme's color/brush palette (its `<Theme>.Theme.Colors.xaml`) as a map of which color
+                  plays which role, plus the verified steps to recolor that theme (overriding the palette keys does NOT
+                  recolor it).
                   OMIT this to get the chooser: the list of palette-capable theme names plus how to detect which theme
                   the app already uses. Detect the current theme from the workspace FIRST (App.xaml.cs
-                  `ThemeManager.ApplicationTheme = new <Name>Theme();`, an `Infragistics.WPF.Themes.<Name>.Trial`
+                  `ThemeManager.ApplicationTheme = new <Name>Theme();` or `new IgTheme()`, an `Infragistics.WPF.Themes.<Name>.Trial`
                   PackageReference, or a `Theme="<Name>"` attribute); if you cannot, ask the user which base theme
                   (or dark vs light) they want, then call again with that theme.
             """)]
@@ -441,7 +608,7 @@ public sealed partial class ThemeTools(DataStore store, ToolLog log)
         if (match.file is null)
         {
             var names = string.Join(", ", available.Select(t => $"`{t.theme}`"));
-            var msg = $"No re-tunable palette found for theme \"{theme}\". Themes with a color palette (newer ThemeManager family): {names}. Call setup_wpf_theme to browse all themes and style folders.";
+            var msg = $"No color palette found for theme \"{theme}\". Themes with a color palette (newer ThemeManager family): {names}. Call setup_wpf_theme to browse all themes and style folders.";
             log.Write("get_wpf_theme_palette", input, msg, timer);
             return ToolResult.Error(msg);
         }
@@ -503,27 +670,9 @@ public sealed partial class ThemeTools(DataStore store, ToolLog log)
                 output.Add($"| `{e.Key}` | `{e.Value}`{(e.Kind == "Brush" ? " _(brush)_" : "")} | {e.Note ?? ""} |");
         }
 
+        var themeFiles = store.ThemeIndex.NewerThemes.First(t => t.Theme == match.theme).Files;
         output.Add("");
-        output.Add("## Override skeleton");
-        output.Add("");
-        output.Add("_Copy into a `ResourceDictionary`, change only the values you want, and merge it ahead of the theme load (see guidance below). Delete rows you are not changing._");
-        output.Add("");
-        output.Add("```xml");
-        output.Add("<ResourceDictionary xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"");
-        output.Add("                    xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">");
-        foreach (var g in byGroup)
-        {
-            output.Add($"  <!-- {g.Key} -->");
-            foreach (var e in g)
-                output.Add(e.Kind == "Brush"
-                    ? $"  <SolidColorBrush x:Key=\"{e.Key}\" Color=\"{e.Value}\" />"
-                    : $"  <Color x:Key=\"{e.Key}\">{e.Value}</Color>");
-        }
-        output.Add("</ResourceDictionary>");
-        output.Add("```");
-
-        output.Add("");
-        output.Add(PaletteGuidance);
+        output.Add(RecolorGuidance(match.theme, themeFiles));
 
         var text = string.Join('\n', output);
         log.Write("get_wpf_theme_palette", input, text, timer);

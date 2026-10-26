@@ -25,6 +25,11 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
     {
         var timer = Stopwatch.StartNew();
         var input = new { filter };
+        if (ToolInput.CheckLength("filter", filter, max: 128) is { } invalid)
+        {
+            log.Write("list_wpf_components", input, invalid, timer);
+            return ToolResult.Error(invalid);
+        }
         var components = store.Components;
 
         // Same relevance ladder as handlers.ts: name match always outranks a description or
@@ -68,7 +73,7 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
         {
             var line = new List<string>
             {
-                $"## {c.Component}",
+                $"### {c.Component}",
                 $"- **xmlns:** `xmlns:{c.DefaultPrefix}=\"{c.XamlNamespace}\"`",
                 $"- **NuGet:** `{c.NugetPackage}`",
                 $"- **Assembly:** `{c.Assembly}`",
@@ -79,7 +84,7 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             return string.Join('\n', line);
         });
 
-        var header = $"# Infragistics WPF Components ({matches.Length}{(string.IsNullOrEmpty(filter) ? " total" : $" matching \"{filter}\"")})";
+        var header = $"## Infragistics WPF Components ({matches.Length}{(string.IsNullOrEmpty(filter) ? " total" : $" matching \"{filter}\"")})";
         var text = string.Join("\n\n", new[] { header, "" }.Concat(lines));
 
         log.Write("list_wpf_components", input, text, timer);
@@ -97,6 +102,7 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             if (m.IsEnum == true && m.EnumValues is { Length: > 0 })
                 line += $" — values: `{string.Join("` | `", m.EnumValues)}`";
         }
+        if (m.IsField == true) line += " _(static field)_";
         line += $": {(string.IsNullOrEmpty(m.Summary) ? "—" : m.Summary)}";
         return line;
     }
@@ -146,14 +152,14 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             if (direct.Length > 0)
             {
                 output.Add("");
-                output.Add($"## {label}");
+                output.Add($"### {label}");
                 if (IsCompact(detail, kindKey, inherited: false)) output.Add(FormatMemberNames(direct));
                 else output.AddRange(direct.Select(FormatMember));
             }
             foreach (var group in inherited)
             {
                 output.Add("");
-                output.Add($"## {label} (inherited from `{group.Key}`)");
+                output.Add($"### {label} (inherited from `{group.Key}`)");
                 if (IsCompact(detail, kindKey, inherited: true)) output.Add(FormatMemberNames(group));
                 else output.AddRange(group.Select(FormatMember));
             }
@@ -165,7 +171,7 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
     [Description(ToolDescriptions.GetWpfApiReference)]
     public CallToolResult GetApiReference(
         [Description("""
-            Any Infragistics WPF type name — 7000+ types including controls (e.g. "XamDataGrid"),
+            Any public Infragistics WPF type name — 5,300+ types including controls (e.g. "XamDataGrid"),
                   supporting types (e.g. "FieldLayout", "SummaryDefinition"), enums, strategies, indicators, and more.
                   Case-insensitive. To find a Xam* control name use list_wpf_components. To discover any other type name use search_wpf_api.
             """)]
@@ -179,11 +185,16 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
                   Examples: "YAxis" (every YAxis* member), "FieldLayout", "Changed". Use it to check specific members on a large type,
                   or to get details of members a compacted response lists by name only.
             """)]
-        [MaxLength(64)]
+        [MaxLength(128)]
         string? member = null)
     {
         var timer = Stopwatch.StartNew();
         var input = new { component, kind = kind.ToString(), member };
+        if ((ToolInput.CheckLength("component", component, max: 128, min: 1) ?? ToolInput.CheckLength("member", member, max: 128)) is { } invalid)
+        {
+            log.Write("get_wpf_api_reference", input, invalid, timer);
+            return ToolResult.Error(invalid);
+        }
         var memberFilter = member?.Trim();
 
         var doc = store.LoadApiDoc(component);
@@ -211,16 +222,24 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
         var summary = string.IsNullOrEmpty(doc.Summary) ? "_(no summary)_" : doc.Summary;
         var output = new List<string>
         {
-            $"# {doc.Component}",
+            $"## {doc.Component}",
             "",
             $"**xmlns:** `xmlns:{doc.DefaultPrefix}=\"{doc.XamlNamespace}\"`",
+        };
+        if (doc.XamlName is { } xamlName)
+            output.Add($"**XAML name:** `{doc.DefaultPrefix}:{xamlName}` (nested class)");
+        // clr-namespace names the assembly, and only the .NET (8+) builds are called Infragistics.WPF.*.
+        if (doc.XamlNamespace.StartsWith("clr-namespace:", StringComparison.Ordinal) && doc.Assembly.StartsWith("Infragistics.WPF", StringComparison.Ordinal))
+            output.Add($"_.NET Framework 4.x apps: use `assembly=InfragisticsWPF{doc.Assembly["Infragistics.WPF".Length..]}` (that build's assembly name)._");
+        output.AddRange(new[]
+        {
             $"**NuGet:** `{doc.NugetPackage}`",
             $"**Assembly:** `{doc.Assembly}`",
             $"**Full type name:** `{doc.DotnetNamespace}.{doc.Component}`",
             "",
-            "## Summary",
+            "### Summary",
             summary,
-        };
+        });
 
         if (doc.Alternates is { Length: > 0 })
         {
@@ -234,7 +253,7 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
         if (!string.IsNullOrEmpty(doc.Remarks))
         {
             output.Add("");
-            output.Add("## Remarks");
+            output.Add("### Remarks");
             output.Add(doc.Remarks);
         }
 
@@ -324,6 +343,11 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
     {
         var timer = Stopwatch.StartNew();
         var input = new { components, projectName, framework = framework.Wire() };
+        if (ToolInput.CheckLength("projectName", projectName, max: 128, min: 1) is { } invalid)
+        {
+            log.Write("get_wpf_project_scaffold", input, invalid, timer);
+            return ToolResult.Error(invalid);
+        }
 
         if (!ProjectNameRegex().IsMatch(projectName))
         {
@@ -380,9 +404,9 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             lines.Add("");
         }
 
-        lines.Add($"# WPF Project Scaffold: `{projectName}`");
+        lines.Add($"## WPF Project Scaffold: `{projectName}`");
         lines.Add("");
-        lines.Add("## 1. Create and configure the project");
+        lines.Add("### 1. Create and configure the project");
         lines.Add("");
         lines.Add("```bash");
         lines.Add($"dotnet new wpf -n {projectName} --framework {framework.Wire()}");
@@ -391,7 +415,7 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
         lines.Add("dotnet restore");
         lines.Add("```");
         lines.Add("");
-        lines.Add("## 2. Add xmlns declarations to MainWindow.xaml");
+        lines.Add("### 2. Add xmlns declarations to MainWindow.xaml");
         lines.Add("");
         lines.Add("```xml");
         lines.Add("<Window ...");
@@ -400,7 +424,7 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
         lines.Add("```");
 
         lines.Add("");
-        lines.Add("## Components resolved");
+        lines.Add("### Components resolved");
         lines.AddRange(resolved.Select(r => $"- **{r.component}** → `{r.nugetPackage}`"));
 
         var text = string.Join('\n', lines);

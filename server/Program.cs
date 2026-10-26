@@ -11,7 +11,8 @@ var version = (Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInform
     .Split('+')[0];
 
 var store = new DataStore(Path.Combine(AppContext.BaseDirectory, "data"));
-var log = new ToolLog(args.Contains("--debug"));
+var debug = args.Contains("--debug");
+var log = new ToolLog(debug);
 
 // Content root = the tool's own folder, not the MCP client's working directory, so an
 // unrelated (or malformed) appsettings.json in the user's workspace is never loaded.
@@ -22,6 +23,9 @@ var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
 });
 // stdout is the MCP transport — every log line must go to stderr.
 builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
+// MCP clients surface the server's stderr in their logs; the SDK's per-request info lines are
+// only worth it when debugging. The "ready" line below is Console.Error, so it always shows.
+builder.Logging.SetMinimumLevel(debug ? LogLevel.Information : LogLevel.Warning);
 builder.Services.AddSingleton(store);
 builder.Services.AddSingleton(log);
 builder.Services

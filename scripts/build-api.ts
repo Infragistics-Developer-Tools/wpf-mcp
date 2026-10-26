@@ -21,31 +21,6 @@ const PACKAGES_DIR  = join(ROOT, 'nuget', 'packages');
 const API_OUT_DIR   = join(ROOT, 'src', 'data', 'api');
 const NS_OUT_FILE   = join(ROOT, 'src', 'data', 'namespaces.json');
 
-// ── XAML namespace map ────────────────────────────────────────────────────────
-// Maps assembly name → XAML xmlns URI + recommended prefix.
-// Sourced from [assembly: XmlnsDefinition] attributes; stable across versions.
-const ASSEMBLY_XMLNS: Record<string, { xmlns: string; prefix: string }> = {
-  'Infragistics.WPF.DataPresenter':               { xmlns: 'http://infragistics.com/DataPresenter',   prefix: 'igDP'            },
-  'InfragisticsWPF.DataPresenter':                { xmlns: 'http://infragistics.com/DataPresenter',   prefix: 'igDP'            },
-  'Infragistics.WPF.DockManager':                 { xmlns: 'http://infragistics.com/DockManager',     prefix: 'igDock'          },
-  'InfragisticsWPF.DockManager':                  { xmlns: 'http://infragistics.com/DockManager',     prefix: 'igDock'          },
-  'Infragistics.WPF.Ribbon':                      { xmlns: 'http://infragistics.com/Ribbon',          prefix: 'igRibbon'        },
-  'InfragisticsWPF.Ribbon':                       { xmlns: 'http://infragistics.com/Ribbon',          prefix: 'igRibbon'        },
-  'Infragistics.WPF.Editors':                     { xmlns: 'http://infragistics.com/Editors',         prefix: 'igEditors'       },
-  'InfragisticsWPF.Editors':                      { xmlns: 'http://infragistics.com/Editors',         prefix: 'igEditors'       },
-  'Infragistics.WPF.Documents.Excel':             { xmlns: 'http://infragistics.com/Excel',           prefix: 'igExcel'         },
-  'InfragisticsWPF.Documents.Excel':              { xmlns: 'http://infragistics.com/Excel',           prefix: 'igExcel'         },
-  'Infragistics.WPF.DataPresenter.ExcelExporter': { xmlns: 'http://infragistics.com/ExcelExporter',   prefix: 'igExcelExporter' },
-  'InfragisticsWPF.DataPresenter.ExcelExporter':  { xmlns: 'http://infragistics.com/ExcelExporter',   prefix: 'igExcelExporter' },
-  'Infragistics.WPF.DataPresenter.WordWriter':    { xmlns: 'http://infragistics.com/WordWriter',      prefix: 'igWordWriter'    },
-  'InfragisticsWPF.DataPresenter.WordWriter':     { xmlns: 'http://infragistics.com/WordWriter',      prefix: 'igWordWriter'    },
-  'Infragistics.WPF.Reporting':                   { xmlns: 'http://infragistics.com/Reporting',       prefix: 'igRep'           },
-  'InfragisticsWPF.Reporting':                    { xmlns: 'http://infragistics.com/Reporting',       prefix: 'igRep'           },
-  'Infragistics.WPF.OutlookBar':                  { xmlns: 'http://infragistics.com/OutlookBar',      prefix: 'igOB'            },
-  'InfragisticsWPF.OutlookBar':                   { xmlns: 'http://infragistics.com/OutlookBar',      prefix: 'igOB'            },
-};
-const DEFAULT_XMLNS = { xmlns: 'http://schemas.infragistics.com/xaml', prefix: 'ig' };
-
 // ── Type name exclusion list ──────────────────────────────────────────────────
 const EXCLUDE_SUFFIXES = [
   'AutomationPeer', 'EventArgs', 'Converter', 'Exception', 'Factory',
@@ -193,6 +168,8 @@ export interface ApiMemberEntry {
   isEnum?: boolean;
   enumValues?: string[];
   declaredOn?: string;
+  /** A static ResourceKey/RoutedCommand field (used via {x:Static}), listed with the properties. */
+  isField?: boolean;
 }
 
 export interface AlternateType {
@@ -208,6 +185,8 @@ export interface ApiEntry {
   xamlNamespace: string;
   defaultPrefix: string;
   dotnetNamespace: string;
+  /** Set only for nested types: their XAML name, e.g. "DataPresenterRoyalDark+Locator". */
+  xamlName?: string;
   summary: string;
   remarks: string;
   /** Immediate base type name, if it is also an indexed Infragistics type. */
@@ -234,7 +213,11 @@ interface TypeInfoEntry {
   isNullable: boolean;
   isEnum: boolean;
   enumValues?: string[];
+  isField?: boolean;
 }
+
+/** XAML namespace of one type, resolved by the type extractor (see "Phase 3" in type-extractor/Program.cs). */
+interface XamlTypeInfo { xmlns: string; prefix: string; ns: string; xamlName?: string }
 
 function loadTypeInfo(): Record<string, TypeInfoEntry | string> {
   const path = join(ROOT, 'nuget', 'type-info.json');
@@ -245,27 +228,49 @@ function loadTypeInfo(): Record<string, TypeInfoEntry | string> {
   );
   const raw = readFileSync(path, 'utf-8');
   const result: Record<string, TypeInfoEntry | string> = {};
+  // The regexes capture raw JSON string contents, and System.Text.Json escapes ` < > + as ` etc.: decode them,
+  // or "DataPresenterResourceSet`1" never matches and "Action<ToolCommand>" reaches agents as "Action<ToolCommand>".
+  const decode = (s: string): string => JSON.parse(`"${s}"`);
 
-  // Parse __baseType string values  e.g. "XamCategoryChart.__baseType":"XamXYChart"
-  const baseRe = /"([^"]+\.__baseType)":"([^"]+)"/g;
-  let bm: RegExpExecArray | null;
-  while ((bm = baseRe.exec(raw)) !== null) result[bm[1]] = bm[2];
-
-  // Parse property type entries
-  const re = /"([^"]+)":\{"typeName":"([^"]+)","isNullable":(true|false),"isEnum":(true|false)(?:,"enumValues":\[([^\]]*)])?\}/g;
+  // Parse property (and static field) type entries
+  const re = /"([^"]+)":\{"typeName":"([^"]+)","isNullable":(true|false),"isEnum":(true|false)(?:,"enumValues":\[([^\]]*)])?(?:,"isField":(true))?\}/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(raw)) !== null) {
     const enumValuesRaw = m[5];
-    result[m[1]] = {
-      typeName:   m[2],
+    const entry: TypeInfoEntry = {
+      typeName:   decode(m[2]),
       isNullable: m[3] === 'true',
       isEnum:     m[4] === 'true',
       enumValues: enumValuesRaw
-        ? enumValuesRaw.replace(/"/g, '').split(',').filter(Boolean)
+        ? enumValuesRaw.replace(/"/g, '').split(',').filter(Boolean).map(decode)
         : undefined,
     };
+    if (m[6]) entry.isField = true;
+    result[decode(m[1])] = entry;
   }
   return result;
+}
+
+/**
+ * The extractor's maps keyed by "Assembly|Namespace.Type" (nested: "…|Namespace.Outer.Inner"), so types that share
+ * a short name can't overwrite each other: each type's XAML namespace and prefix, its Infragistics base type, and
+ * the types and members ("…|Namespace.Type.Member") that are not public.
+ */
+function loadExtractorMaps(): {
+  xaml: Record<string, XamlTypeInfo>; baseTypes: Record<string, string>; nonPublic: Set<string>; nonPublicMembers: Set<string>;
+} {
+  const parsed = JSON.parse(readFileSync(join(ROOT, 'nuget', 'type-info.json'), 'utf-8'));
+  const xaml = parsed.__xaml as Record<string, XamlTypeInfo> | undefined;
+  const baseTypes = parsed.__baseTypes as Record<string, string> | undefined;
+  const nonPublic = parsed.__nonPublicTypes as string[] | undefined;
+  const nonPublicMembers = parsed.__nonPublicMembers as string[] | undefined;
+  assertBuildStep(!!xaml && Object.keys(xaml).length > 0 && !!baseTypes && Object.keys(baseTypes).length > 0 &&
+    !!nonPublic?.length && !!nonPublicMembers?.length,
+    `nuget/type-info.json has no "__xaml" / "__baseTypes" / "__nonPublicTypes" / "__nonPublicMembers" section — it was ` +
+    `written by an older type extractor, so every type would get a guessed xmlns, no inherited members, and internal ` +
+    `classes and members would be indexed as usable. Run: npm run generate:types`
+  );
+  return { xaml: xaml!, baseTypes: baseTypes!, nonPublic: new Set(nonPublic), nonPublicMembers: new Set(nonPublicMembers) };
 }
 
 /**
@@ -277,30 +282,34 @@ function loadTypeInfo(): Record<string, TypeInfoEntry | string> {
  */
 function enrichWithInheritance(
   entries: Map<string, ApiEntry>,
-  typeInfo: Record<string, TypeInfoEntry | string>
+  baseTypes: Record<string, string>,
+  allTypes: Map<string, ApiEntry>
 ): number {
   let enriched = 0;
+  const fullKey = (e: ApiEntry) => `${e.assembly}|${e.dotnetNamespace}.${e.component}`;
 
-  for (const [typeName, entry] of entries) {
-    const immediateBase = typeInfo[`${typeName}.__baseType`];
-    if (typeof immediateBase === 'string') entry.baseType = immediateBase;
-
-    if (!(`${typeName}.__baseType` in typeInfo)) continue;
+  for (const entry of entries.values()) {
+    const immediateBase = baseTypes[fullKey(entry)];
+    if (!immediateBase) continue;
+    entry.baseType = immediateBase.split('.').pop()!;
 
     const knownProps  = new Set(entry.properties.map(p => p.name));
     const knownEvents = new Set(entry.events.map(e => e.name));
     const knownMethods = new Set(entry.methods.map(m => m.name));
-    const visited = new Set<string>([typeName]);
+    const visited = new Set<string>([fullKey(entry)]);
     let added = false;
-    let current = typeName;
+    let current = fullKey(entry);
 
     while (true) {
-      const base = typeInfo[`${current}.__baseType`];
-      if (!base || typeof base !== 'string') break;
-      if (visited.has(base)) break;   // cycle guard
-      visited.add(base);
+      const baseKey = baseTypes[current];
+      if (!baseKey) break;
+      if (visited.has(baseKey)) break;   // cycle guard
+      visited.add(baseKey);
 
-      const baseEntry = entries.get(base);
+      // Looked up by full name among every parsed type, not just the pages: a base that lost its short name to a
+      // same-named type (XamGrid's Cell; the "Cell" page documents the DataPresenter one) still passes its members on.
+      const base = baseKey.split('.').pop()!;
+      const baseEntry = allTypes.get(baseKey);
       if (!baseEntry) break;
 
       for (const p of baseEntry.properties.filter(p => !p.declaredOn && !knownProps.has(p.name))) {
@@ -318,7 +327,7 @@ function enrichWithInheritance(
         knownMethods.add(m.name);
         added = true;
       }
-      current = base;
+      current = baseKey;
     }
 
     if (added) enriched++;
@@ -332,11 +341,19 @@ async function generate() {
   mkdirSync(API_OUT_DIR, { recursive: true });
 
   const typeInfo = loadTypeInfo();
+  const { xaml: xamlTypes, baseTypes, nonPublic, nonPublicMembers } = loadExtractorMaps();
+  let skippedNonPublic = 0, skippedNonPublicMembers = 0;
+  // Prefix per xmlns, for the few types the extractor has no entry for (generics, DLLs left out of XAML resolution).
+  const prefixByXmlns = new Map(Object.values(xamlTypes).map(x => [x.xmlns, x.prefix]));
+  const xamlFallbacks: string[] = [];
   const discovered = discoverXmlFiles();
   const sources = discovered.filter(s => !EXCLUDE_PACKAGES.includes(s.packageId.toLowerCase()));
   console.log(`Scanning ${sources.length} XML documentation files...`);
 
   const entries = new Map<string, ApiEntry>();
+  // Every parsed type by "Assembly|Namespace.Type", including those that lose their short name below: the inheritance
+  // walk follows real base types, which aren't always the type that owns their name.
+  const allTypes = new Map<string, ApiEntry>();
   // Entries are keyed by short type name, but short names are not unique across
   // assemblies. Collisions are resolved case-INsensitively: type files are named after
   // the key, so on Windows "strings" and "Strings" would otherwise be written to the
@@ -344,6 +361,7 @@ async function generate() {
   // names case-insensitively, so a case-variant twin is unreachable regardless.
   const keyByLower = new Map<string, string>();
   const memberCounts = new Map<string, number>();
+  const contestCounts = new Map<string, number>();
   const alternates = new Map<string, AlternateType[]>();
 
   for (let fileIdx = 0; fileIdx < sources.length; fileIdx++) {
@@ -357,12 +375,11 @@ async function generate() {
     const assemblyMatch = xml.match(/<assembly>\s*<name>([^<]+)<\/name>/);
     if (!assemblyMatch) { console.log('skip (no assembly)'); continue; }
     const assemblyName = assemblyMatch[1].trim();
-    const xmlnsInfo = ASSEMBLY_XMLNS[assemblyName] ?? DEFAULT_XMLNS;
 
     const members = parseAllMembers(xml);
 
     // Build lookup maps once per file — O(n) instead of O(n × types)
-    const typeMembers = new Map<string, { props: RawMember[]; events: RawMember[]; methods: RawMember[] }>();
+    const typeMembers = new Map<string, { props: RawMember[]; fields: RawMember[]; events: RawMember[]; methods: RawMember[] }>();
     const typeList: RawMember[] = [];
     for (const m of members) {
       if (m.kind === 'T') { typeList.push(m); continue; }
@@ -374,9 +391,10 @@ async function generate() {
       const lastDot = memberPath.lastIndexOf('.');
       if (lastDot < 0) continue;
       const typeFqn = memberPath.substring(0, lastDot);
-      if (!typeMembers.has(typeFqn)) typeMembers.set(typeFqn, { props: [], events: [], methods: [] });
+      if (!typeMembers.has(typeFqn)) typeMembers.set(typeFqn, { props: [], fields: [], events: [], methods: [] });
       const bucket = typeMembers.get(typeFqn)!;
       if (m.kind === 'P') bucket.props.push(m);
+      else if (m.kind === 'F') bucket.fields.push(m);   // kept below only if the extractor marked it isField
       else if (m.kind === 'E') bucket.events.push(m);
       else if (m.kind === 'M' && !m.name.startsWith('#')) bucket.methods.push(m);
     }
@@ -385,35 +403,70 @@ async function generate() {
       if (!type.fullName.startsWith('Infragistics.')) continue;
       const typeName = type.name;
       if (shouldExclude(typeName)) continue;
+      // The XML docs also document internal / private nested classes, which apps can't use. Leaving them out here,
+      // before short-name collisions are resolved, also lets a public type win its name (DashboardTileGroupDescription).
+      if (nonPublic.has(`${assemblyName}|${type.fullName}`)) { skippedNonPublic++; continue; }
 
+      // For a nested type this is "Namespace.Outer", which keeps the C# full name right; xamlName carries "Outer+Inner".
       const dotnetNs = type.fullName.substring(0, type.fullName.lastIndexOf('.'));
-      const bucket = typeMembers.get(type.fullName) ?? { props: [], events: [], methods: [] };
+      const bucket = typeMembers.get(type.fullName) ?? { props: [], fields: [], events: [], methods: [] };
+
+      let xaml = xamlTypes[`${assemblyName}|${type.fullName}`];
+      if (!xaml) {
+        // No resolved entry (open generics can't be named in XAML; DLLs the extractor left out of XAML resolution):
+        // clr-namespace syntax, which needs no xmlns mapping.
+        const xmlns = `clr-namespace:${dotnetNs};assembly=${assemblyName}`;
+        xaml = { xmlns, prefix: prefixByXmlns.get(xmlns) ?? `ig${dotnetNs.split('.').pop()}`, ns: dotnetNs };
+        xamlFallbacks.push(type.fullName);
+      }
+
+      const withTypeInfo = (m: RawMember) => {
+        const ti = typeInfo[`${assemblyName}|${type.fullName}.${m.name}`];
+        const extra = (ti && typeof ti === 'object') ? ti : {};
+        return { name: m.name, summary: m.summary, ...extra };
+      };
+      // The XML docs also document members no app can call: internal / private ones (ValueEditor.InternalIsInitialized),
+      // and explicit interface implementations, whose doc names have '#' for '.' ("System#Collections#IList#Add").
+      const usable = (m: RawMember) => {
+        if (m.summary.toLowerCase() === 'internal') return false;
+        if (m.name.includes('#') || nonPublicMembers.has(`${assemblyName}|${type.fullName}.${m.name.replace(/``\d+$/, '')}`)) {
+          skippedNonPublicMembers++;
+          return false;
+        }
+        return true;
+      };
 
       const entry: ApiEntry = {
         component:      typeName,
         assembly:       assemblyName,
         nugetPackage:   packageId,
-        xamlNamespace:  xmlnsInfo.xmlns,
-        defaultPrefix:  xmlnsInfo.prefix,
+        xamlNamespace:  xaml.xmlns,
+        defaultPrefix:  xaml.prefix,
         dotnetNamespace: dotnetNs,
+        ...(xaml.xamlName ? { xamlName: xaml.xamlName } : {}),
         summary:        type.summary,
         remarks:        type.remarks,
-        properties: bucket.props
-                           .filter(m => m.summary.toLowerCase() !== 'internal')
-                           .map(m => {
-                             const ti = typeInfo[`${typeName}.${m.name}`];
-                             const extra = (ti && typeof ti === 'object') ? ti : {};
-                             return { name: m.name, summary: m.summary, ...extra };
-                           }),
+        // Static key/command fields are listed with the properties: both are used the same way in XAML.
+        properties: [
+          ...bucket.props.filter(usable).map(withTypeInfo),
+          ...bucket.fields.filter(usable).map(withTypeInfo).filter(f => (f as ApiMemberEntry).isField === true),
+        ],
         events:     bucket.events
-                           .filter(m => m.summary.toLowerCase() !== 'internal')
+                           .filter(usable)
                            .map(m => ({ name: m.name, summary: m.summary })),
         methods:    bucket.methods
-                           .filter(m => m.summary.toLowerCase() !== 'internal')
+                           .filter(usable)
                            .map(m => ({ name: m.name, summary: m.summary })),
       };
+      allTypes.set(`${assemblyName}|${type.fullName}`, entry);
 
       const memberCount = entry.properties.length + entry.events.length + entry.methods.length;
+      // Short-name contests are still decided by the count from before internal / private members were left out:
+      // with the new count, Cell, FieldChooser and RecordFilterCollection switched from the DataPresenter types to the
+      // XamGrid / XamPivotGrid / DataManager ones.
+      const documented = (ms: RawMember[]) => ms.filter(m => m.summary.toLowerCase() !== 'internal').length;
+      const contestCount = documented(bucket.props) + entry.properties.filter(p => (p as ApiMemberEntry).isField).length +
+                           documented(bucket.events) + documented(bucket.methods);
       const candidate: AlternateType = {
         fullName: type.fullName,
         nugetPackage: packageId,
@@ -426,6 +479,7 @@ async function generate() {
         entries.set(typeName, entry);
         keyByLower.set(lower, typeName);
         memberCounts.set(lower, memberCount);
+        contestCounts.set(lower, contestCount);
       } else {
         // Two different types share this short name. Discovery order is just
         // package-alphabetical, which surfaces stub types over the real control
@@ -434,7 +488,7 @@ async function generate() {
         const incumbent = entries.get(incumbentKey)!;
         if (!alternates.has(lower)) alternates.set(lower, []);
 
-        if (memberCount > memberCounts.get(lower)!) {
+        if (contestCount > contestCounts.get(lower)!) {
           alternates.get(lower)!.push({
             fullName: `${incumbent.dotnetNamespace}.${incumbent.component}`,
             nugetPackage: incumbent.nugetPackage,
@@ -444,12 +498,19 @@ async function generate() {
           entries.set(typeName, entry);
           keyByLower.set(lower, typeName);
           memberCounts.set(lower, memberCount);
+          contestCounts.set(lower, contestCount);
         } else {
           alternates.get(lower)!.push(candidate);
         }
       }
     }    console.log(`${Date.now() - t0}ms  (${members.length} members)`);
   }
+
+  console.log(`Left out ${skippedNonPublic} non-public (internal / private nested) type(s) documented in the XML, and ` +
+    `${skippedNonPublicMembers} member(s) of public types that are internal / private or explicit interface implementations.`);
+  const genericFallbacks = xamlFallbacks.filter(n => n.includes('`')).length;
+  console.log(`XAML namespaces: ${xamlFallbacks.length} type(s) fell back to clr-namespace syntax ` +
+    `(${genericFallbacks} generic, ${xamlFallbacks.length - genericFallbacks} other${xamlFallbacks.length > genericFallbacks ? `: ${xamlFallbacks.filter(n => !n.includes('`')).slice(0, 8).join(', ')}` : ''})`);
 
   for (const [lower, alts] of alternates) {
     const winner = entries.get(keyByLower.get(lower)!);
@@ -458,7 +519,14 @@ async function generate() {
 
   // Enrich in-memory, then write everything at once
   console.log(`Enriching inheritance...`);
-  const enriched = enrichWithInheritance(entries, typeInfo);
+  const enriched = enrichWithInheritance(entries, baseTypes, allTypes);
+
+  const escaped = [...entries.values()].filter(e => /\\\\u00[0-9A-Fa-f]{2}/.test(JSON.stringify(e)));
+  assertBuildStep(escaped.length === 0,
+    `${escaped.length} API entr${escaped.length === 1 ? 'y' : 'ies'} (e.g. ${escaped.slice(0, 3).map(e => e.component).join(', ')}) contain ` +
+    `JSON escapes such as \\u003C as literal text — a type-info.json string was used without decode(), so agents would ` +
+    `read "Action\\u003CToolCommand\\u003E" instead of "Action<ToolCommand>".`
+  );
 
   console.log(`Writing ${entries.size} API files...`);
   await Promise.all(
