@@ -263,7 +263,7 @@ async function main(): Promise<void> {
         const pr = await call('get_wpf_theme_resource', { path, page: p });
         joined += /```xml\n([\s\S]*)\n```$/.exec(textOf(pr))?.[1] ?? '\u0000';
       }
-      const onDisk = readFileSync(join(ROOT, 'src', 'data', 'theme-resources', path), 'utf8').replace(/^﻿/, '');
+      const onDisk = readFileSync(join(dirname(TARGET.entry), 'data', 'theme-resources', path), 'utf8').replace(/^\uFEFF/, '');
       check(`its ${pageCount} pages concatenate to the exact file`, joined === onDisk, `${joined.length} vs ${onDisk.length} chars`);
       // 36 matches here, so the result itself takes 2 pages: the root start tag is on the first, the end tag on the last.
       r = await call('get_wpf_theme_resource', { path, find: 'Legend' });
