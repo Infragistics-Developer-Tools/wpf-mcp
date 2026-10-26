@@ -1,3 +1,30 @@
+# [0.1.0-beta.1](https://github.com/Infragistics-Developer-Tools/wpf-mcp/compare/0.1.0-beta.0...0.1.0-beta.1) (2026-10-26)
+
+
+### Features
+* **theme:** `get_wpf_theme_palette` returns verified, theme-specific recolor steps (control-level styles based on the theme's own styles, or an extended theme) instead of palette-key overrides, which never recolor a ThemeManager theme
+* **theme:** `get_wpf_theme_resource` no longer cuts files at 24,000 characters: large files return a contents overview, then `page` (pages join back into the exact file) or `find` (matching entries in full)
+* **api-reference:** responses over 25,000 characters are compacted, and the new `member` filter returns full details for the matching members
+* **api-reference:** static resource keys and commands (`DockManagerBrushKeys`, `DataPresenterCommands`, …) are listed, marked "(static field)"; nested classes show their XAML name (`Outer+Inner`)
+* **docs:** Claude Code setup with a project `.mcp.json`, which also works in the VS Code extension
+
+### Bug Fixes
+* **api-data:** each type's xmlns comes from its own DLL's `XmlnsDefinition` attributes: 1,984 public types had an xmlns that didn't resolve to them (e.g. XamTabControl), and 13 more get `clr-namespace:` instead of an xmlns that fails with MC3064
+* **api-data:** internal classes and members are no longer indexed (6,907 → 5,343 pages; `XamFunnelController` and `XamFunnelConnector` are gone from `list_wpf_components`; 9,006 unusable member entries removed)
+* **api-data:** inheritance and member types follow the exact class: wrong base classes on 488 pages (the chart `Axis` showed Excel members), 29 types missing inherited members, 55 wrong property types; theme classes now show their styles
+* **api-data:** generic type names no longer reach agents JSON-escaped (474 pages)
+* **theme:** the IG theme's apply line uses `IgTheme` (`IGTheme` didn't compile)
+* **server:** the `--debug` log keeps every entry under parallel calls, and stderr shows only warnings unless `--debug` is set
+* **server:** `limit` is clamped to 1–50, and over-long or empty inputs return a clear error
+* **docs-search:** `control: "ThemeManager"` finds the "IG Theme Manager" topics
+* **data:** package IDs keep their canonical casing (`Infragistics.WPF.DataGrids.Trial`)
+* **ci:** `mcp-publisher` is pinned to v1.8.1 and checked against its SHA-256; Dependabot keeps the GitHub Actions current
+
+### Changes
+* tool responses start with `##` headings instead of `#` (the theme tools still use `#`)
+* data is still Infragistics Ultimate UI for WPF 26.1.21
+
+
 # [0.1.0-beta.0](https://github.com/Infragistics-Developer-Tools/wpf-mcp/compare/0.0.1-alpha.5...0.1.0-beta.0) (2026-10-06)
 
 
