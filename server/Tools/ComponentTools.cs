@@ -93,17 +93,18 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
 
     // ── get_wpf_api_reference ────────────────────────────────────────────────
 
-    private static string FormatMember(ApiMemberEntry m)
+    private static string FormatMember(ApiMemberEntry m, bool withParameters)
     {
-        var line = $"- **{m.Name}**";
-        if (!string.IsNullOrEmpty(m.TypeName))
-        {
-            line += $" `{m.TypeName}`";
-            if (m.IsEnum == true && m.EnumValues is { Length: > 0 })
-                line += $" — values: `{string.Join("` | `", m.EnumValues)}`";
-        }
+        // A signature names the type itself: "void Export(OutputFormat outputFormat)", "double this[int index]".
+        var line = m.Signature is { } signature ? $"- `{signature}`" : $"- **{m.Name}**";
+        if (m.Signature is null && !string.IsNullOrEmpty(m.TypeName)) line += $" `{m.TypeName}`";
+        if (m.IsEnum == true && m.EnumValues is { Length: > 0 })
+            line += $" — values: `{string.Join("` | `", m.EnumValues)}`";
         if (m.IsField == true) line += " _(static field)_";
         line += $": {(string.IsNullOrEmpty(m.Summary) ? "—" : m.Summary)}";
+        // Only with `member`: parameter descriptions tell overloads apart, but would double the size of a full listing.
+        if (withParameters && m.Parameters is { Length: > 0 })
+            line += string.Concat(m.Parameters.Select(p => $"\n  - `{p.Name}`: {p.Summary}"));
         return line;
     }
 
@@ -133,14 +134,15 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
         _ => "all members are listed by name only",
     };
 
-    // Compact rendering: one line of names per section; details come from a `member` call.
+    // Compact rendering: one line of names per section, an overloaded name once with its count; details come from a `member` call.
     private static string FormatMemberNames(IEnumerable<ApiMemberEntry> items) =>
-        string.Join(", ", items.Select(m => $"`{m.Name}`"));
+        string.Join(", ", items.GroupBy(m => m.Name).Select(g => g.Count() > 1 ? $"`{g.Key}` ({g.Count()})" : $"`{g.Key}`"));
 
-    private static List<string> RenderMemberSections((ApiMemberEntry m, string kind)[] members, ApiDetail detail)
+    private static List<string> RenderMemberSections((ApiMemberEntry m, string kind)[] members, ApiDetail detail, bool withParameters)
     {
         var output = new List<string>();
-        foreach (var (label, kindKey) in new[] { ("Properties", "property"), ("Events", "event"), ("Methods", "method") })
+        string Format(ApiMemberEntry m) => FormatMember(m, withParameters);
+        foreach (var (label, kindKey) in new[] { ("Constructors", "constructor"), ("Properties", "property"), ("Events", "event"), ("Methods", "method") })
         {
             var items = members.Where(m => m.kind == kindKey).Select(m => m.m).ToArray();
             if (items.Length == 0) continue;
@@ -154,14 +156,14 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
                 output.Add("");
                 output.Add($"### {label}");
                 if (IsCompact(detail, kindKey, inherited: false)) output.Add(FormatMemberNames(direct));
-                else output.AddRange(direct.Select(FormatMember));
+                else output.AddRange(direct.Select(Format));
             }
             foreach (var group in inherited)
             {
                 output.Add("");
                 output.Add($"### {label} (inherited from `{group.Key}`)");
                 if (IsCompact(detail, kindKey, inherited: true)) output.Add(FormatMemberNames(group));
-                else output.AddRange(group.Select(FormatMember));
+                else output.AddRange(group.Select(Format));
             }
         }
         return output;
@@ -171,7 +173,7 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
     [Description(ToolDescriptions.GetWpfApiReference)]
     public CallToolResult GetApiReference(
         [Description("""
-            Any public Infragistics WPF type name — 5,300+ types including controls (e.g. "XamDataGrid"),
+            Any public Infragistics WPF type name — 5,100+ types including controls (e.g. "XamDataGrid"),
                   supporting types (e.g. "FieldLayout", "SummaryDefinition"), enums, strategies, indicators, and more.
                   Case-insensitive. To find a Xam* control name use list_wpf_components. To discover any other type name use search_wpf_api.
             """)]
@@ -181,7 +183,8 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
         MemberKind kind = MemberKind.all,
         [Description("""
             Optional member name filter — case-insensitive substring, combinable with "kind".
-                  Returns only the matching members, including inherited ones, with full detail (type, enum values, summary).
+                  Returns only the matching members, including inherited ones, with full detail (type, enum values, summary;
+                  for methods and constructors the signature of every overload and its parameter descriptions).
                   Examples: "YAxis" (every YAxis* member), "FieldLayout", "Changed". Use it to check specific members on a large type,
                   or to get details of members a compacted response lists by name only.
             """)]
@@ -206,7 +209,8 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             return ToolResult.Error(msg);
         }
 
-        var allMembers = doc.Properties.Select(m => (m, kind: "property"))
+        var allMembers = (doc.Constructors ?? []).Select(m => (m, kind: "constructor"))
+            .Concat(doc.Properties.Select(m => (m, kind: "property")))
             .Concat(doc.Events.Select(m => (m, kind: "event")))
             .Concat(doc.Methods.Select(m => (m, kind: "method")))
             .ToArray();
@@ -217,15 +221,16 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             MemberKind.methods => "method",
             _ => null,
         };
-        var members = wanted is null ? allMembers : allMembers.Where(m => m.kind == wanted).ToArray();
+        // kind "methods" covers constructors too.
+        bool IsWanted(string memberKind) => wanted is null || memberKind == wanted || (wanted == "method" && memberKind == "constructor");
+        var members = allMembers.Where(m => IsWanted(m.kind)).ToArray();
 
         var summary = string.IsNullOrEmpty(doc.Summary) ? "_(no summary)_" : doc.Summary;
-        var output = new List<string>
-        {
-            $"## {doc.Component}",
-            "",
-            $"**xmlns:** `xmlns:{doc.DefaultPrefix}=\"{doc.XamlNamespace}\"`",
-        };
+        var output = new List<string> { $"## {doc.Component}", "" };
+        // Old code and docs still use some [Obsolete] types (3 topics use UnboundField): say so before anything else.
+        if (doc.ObsoleteMessage is { } obsoleteMessage)
+            output.AddRange([$"⚠ **OBSOLETE type:** {(string.IsNullOrEmpty(obsoleteMessage) ? "don't use it in new code." : obsoleteMessage)}", ""]);
+        output.Add($"**xmlns:** `xmlns:{doc.DefaultPrefix}=\"{doc.XamlNamespace}\"`");
         if (doc.XamlName is { } xamlName)
             output.Add($"**XAML name:** `{doc.DefaultPrefix}:{xamlName}` (nested class)");
         // clr-namespace names the assembly, and only the .NET (8+) builds are called Infragistics.WPF.*.
@@ -268,10 +273,22 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
                 MemberKind.methods => ("method", "methods"),
                 _ => ("member", "members"),
             };
+            // [Obsolete] members aren't listed, but old code and docs still use them (8 topics set HorizontalZoomable):
+            // a lookup by name gets Infragistics' own note, which usually names the replacement, instead of "not found".
+            var obsolete = (doc.Obsolete ?? [])
+                .Where(o => IsWanted(o.Kind) && o.Name.Contains(memberFilter, StringComparison.OrdinalIgnoreCase)).ToArray();
             output.Add("");
             output.Add(members.Length > 0
                 ? $"_Showing {members.Length} {(members.Length == 1 ? one : many)} whose name contains \"{memberFilter}\", including inherited ones._"
-                : $"_No {many} whose name contains \"{memberFilter}\", including inherited ones. Call get_wpf_api_reference(\"{doc.Component}\") without \"member\" to see every member name, or search_wpf_api(\"{memberFilter}\") to find which type declares it._");
+                : obsolete.Length > 0
+                    ? $"_No current {many} whose name contains \"{memberFilter}\"; the matching obsolete ones:_"
+                    : $"_No {many} whose name contains \"{memberFilter}\", including inherited ones. Call get_wpf_api_reference(\"{doc.Component}\") without \"member\" to see every member name, or search_wpf_api(\"{memberFilter}\") to find which type declares it._");
+            foreach (var o in obsolete)
+            {
+                var what = o.Signature is { } signature ? $"`{signature}`" : $"`{doc.Component}.{o.Name}`";
+                var from = o.DeclaredOn is { } declaredOn ? $" (inherited from `{declaredOn}`)" : "";
+                output.Add($"- ⚠ OBSOLETE {o.Kind} {what}{from}: {(string.IsNullOrEmpty(o.Message) ? "don't use it." : o.Message)}");
+            }
         }
 
         var footer = new List<string>();
@@ -294,8 +311,9 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             footer.Add($"_⚠️ This type has Brush-typed properties (e.g. {examples}) and ships with named themes. Before setting these directly or writing Style/ControlTemplate overrides, call `setup_wpf_theme(component: \"{doc.Component}\")` to check whether a named theme (`Theme=\"...\"` or `ThemeManager`) already covers this, and to get exact resource file paths for customizing it._");
         }
 
+        var withParameters = !string.IsNullOrEmpty(memberFilter);
         string Render(ApiDetail detail, string? note = null) => string.Join('\n',
-            (note is null ? output : output.Append("").Append(note)).Concat(RenderMemberSections(members, detail)).Concat(footer));
+            (note is null ? output : output.Append("").Append(note)).Concat(RenderMemberSections(members, detail, withParameters)).Concat(footer));
         var text = Render(ApiDetail.Full);
 
         // Size guard: take the first level of ApiDetail whose rendering, note included, fits. Headings
@@ -304,8 +322,8 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
         {
             var fullLength = text.Length;
             var next = string.IsNullOrEmpty(memberFilter)
-                ? $"Call get_wpf_api_reference(component: \"{doc.Component}\", member: \"<name>\") for full details (type, enum values, summary) — \"member\" is a case-insensitive substring, so one call can cover a family of related members sharing a prefix."
-                : "Call again with a more specific \"member\" for full details (type, enum values, summary).";
+                ? $"Call get_wpf_api_reference(component: \"{doc.Component}\", member: \"<name>\") for full details (type, enum values, summary, every overload's signature) — \"member\" is a case-insensitive substring, so one call can cover a family of related members sharing a prefix."
+                : "Call again with a more specific \"member\" for full details (type, enum values, summary, every overload's signature).";
             string Compacted(ApiDetail detail) =>
                 Render(detail, $"_ℹ️ Compacted: the full response would be {fullLength} characters, so {CompactionSummary(detail)}. {next}_");
             // Without properties (kind: events/methods) the first level would only cost the members declared on this type their detail.
