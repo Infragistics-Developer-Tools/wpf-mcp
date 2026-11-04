@@ -71,7 +71,8 @@ public record DocIndexEntry(
     string[] ControlNames,
     string[] Tags,
     string Source,
-    string Summary);
+    string Summary,
+    Dictionary<string, int>? Mentions = null);   // Xam* names the topic mentions, lowercased → count
 
 public sealed record DocEntry(
     string Slug,
@@ -80,8 +81,9 @@ public sealed record DocEntry(
     string[] Tags,
     string Source,
     string Summary,
-    string Body,
-    string[] XamlSnippets) : DocIndexEntry(Slug, Title, ControlNames, Tags, Source, Summary);
+    string Body,                 // Markdown: # headings, code in ``` fences
+    string[] XamlSnippets,
+    Dictionary<string, int>? Mentions = null) : DocIndexEntry(Slug, Title, ControlNames, Tags, Source, Summary, Mentions);
 
 public sealed record ThemeResourceFile(string Path, string File, string[] TargetTypes);
 

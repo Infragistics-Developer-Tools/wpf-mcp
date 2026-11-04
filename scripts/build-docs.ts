@@ -30,12 +30,14 @@ const OUT_DIR         = join(ROOT, 'src', 'data', 'docs');
 const INDEX_FILE      = join(ROOT, 'src', 'data', 'docs-index.json');
 
 // WPF-relevant subfolders from docs-common.
-// Excluded: data-grid (web / Blazor grid — WPF's XamDataGrid is in docs-wpf)
+// Excluded: data-grid (web / Blazor grid — WPF's XamDataGrid is in docs-wpf) and win-web-chart (the Windows Forms /
+// ASP.NET UltraChart: DocsConfig.xml defines its {WawChartName} for those two products only, and its 359 topics
+// never mention a WPF control).
 const COMMON_INCLUDE = new Set([
   'barcodes', 'bullet-graph', 'category-chart', 'data-chart', 'data-pie-chart',
   'document-engine', 'donut-chart', 'excel-engine', 'financial-chart', 'funnel-chart',
   'geographic-map', 'linear-gauge', 'pie-chart', 'productivity-tools', 'radial-gauge',
-  'scheduler', 'shape-chart', 'sparkline', 'spreadsheet', 'surface-chart', 'win-web-chart',
+  'scheduler', 'shape-chart', 'sparkline', 'spreadsheet', 'surface-chart',
 ]);
 
 // ── DocsConfig variable substitution (WPF product) ────────────────────────────
@@ -104,6 +106,48 @@ function loadWpfVariables(): Map<string, string> {
 
 const WPF_VARS = loadWpfVariables();
 
+// The attributes a WPF docs build sets: DocsConfig.xml's <Product Name="wpf" BuildFlags="xaml,wpf"/>.
+function loadWpfBuildFlags(): Set<string> {
+  if (!existsSync(DOCS_CONFIG_FILE)) return new Set(['xaml', 'wpf']);   // no docs-common (see loadWpfVariables): its value
+  const flags = /<Product\s+Name="wpf"[^>]*?\sBuildFlags="([^"]*)"/.exec(readFileSync(DOCS_CONFIG_FILE, 'utf-8'))?.[1];
+  assertBuildStep(!!flags,
+    `DocsConfig.xml has no <Product Name="wpf" BuildFlags="…"/>, so there is no way to tell which ifdef:: blocks ` +
+    `belong to WPF: every topic would keep the Windows Forms, Xamarin and Android variants too.`
+  );
+  return new Set(flags!.split(',').map(f => f.trim()).filter(Boolean));
+}
+
+const WPF_FLAGS = loadWpfBuildFlags();
+
+/**
+ * Keep only what a WPF build of the docs shows. docs-common writes each topic once for every platform and wraps the
+ * platform-specific parts in `ifdef::wpf,win-forms[]` … `endif::…[]` (a comma means any of them); docs-wpf has a few
+ * for Silverlight. That is the only conditional form the sources use. Blocks nest.
+ */
+/**
+ * Inline wording per platform: `pick:[wpf,win-forms="text"]` (12,800 uses, one platform list each). The WPF one stays
+ * as plain text; the rest ("In Java:", Xamarin wording) is dropped, as a WPF build does. The text runs to the closing
+ * `"]` on the same line: it may contain `]` (links) and, in code samples, doubled quotes (`wpf=""C:\Book1.xls""`);
+ * a few sources leave out the `=`.
+ */
+function resolvePicks(raw: string): string {
+  return raw.replace(/pick:\[([\w,-]+)=?"([^\n]*?)"\]/g, (_, platforms: string, text: string) =>
+    platforms.split(',').some(p => WPF_FLAGS.has(p.trim().toLowerCase())) ? text : '');
+}
+
+function applyConditionals(raw: string): { text: string; dropped: number } {
+  const keep: boolean[] = [];
+  const out: string[] = [];
+  let dropped = 0;
+  for (const line of raw.split('\n')) {
+    const open = /^ifdef::([^\[]*)\[\]\s*$/.exec(line);
+    if (open) { keep.push(open[1].split(',').some(a => WPF_FLAGS.has(a.trim()))); continue; }
+    if (/^endif::[^\[]*\[\]\s*$/.test(line)) { keep.pop(); continue; }   // a stray endif (3 in the sources) is a no-op
+    if (keep.every(Boolean)) out.push(line); else dropped += line.length + 1;
+  }
+  return { text: out.join('\n'), dropped };
+}
+
 /**
  * Replace {VarName} placeholders using the resolved WPF variable table.
  *
@@ -122,6 +166,15 @@ interface AdocMetadata {
   name: string;
   controlName?: string[];
   tags?: string[];
+  /** Platforms the whole topic is built for ("WPF", "sl", "WINFORMS", "ANDROID") and output formats ("docx-online"). */
+  buildFlags?: string[];
+}
+
+// A topic built only for other platforms (WinForms, Android, Silverlight, Windows Phone): its buildFlags name platforms
+// but none of WPF's. "docx-…" flags are output formats, not platforms, so a topic with only those stays.
+function isForOtherPlatforms(meta: AdocMetadata | null): boolean {
+  const platforms = (meta?.buildFlags ?? []).map(f => f.trim().toLowerCase()).filter(f => f && !f.startsWith('docx-'));
+  return platforms.length > 0 && !platforms.some(f => WPF_FLAGS.has(f));
 }
 
 export interface DocIndexEntry {
@@ -131,10 +184,12 @@ export interface DocIndexEntry {
   tags:         string[];  // e.g. ["How Do I", "Getting Started"]
   source:       'wpf' | 'common';
   summary:      string;    // first ~220 chars of plain body text
+  /** Xam* names the topic mentions, lowercased → count, e.g. { "xammaskedinput": 4 }. Only when there are any. */
+  mentions?:    Record<string, number>;
 }
 
 export interface DocEntry extends DocIndexEntry {
-  body:         string;    // full stripped body (code blocks as plain text)
+  body:         string;    // the topic as Markdown: # headings, code in ``` fences
   xamlSnippets: string[];  // extracted XAML-only code blocks
 }
 
@@ -198,11 +253,28 @@ function extractXamlSnippets(raw: string): string[] {
   return snippets;
 }
 
+// AsciiDoc source languages → Markdown fence languages.
+const FENCE_LANG: Record<string, string> = { csharp: 'csharp', cs: 'csharp', 'c#': 'csharp', vb: 'vb', xaml: 'xml', xml: 'xml', js: 'js', javascript: 'js' };
+
 /**
- * Strip AsciiDoc markup and return plain searchable text.
- * Code block content is kept as plain text (no fences).
+ * AsciiDoc → Markdown: headings as #, code blocks in ``` fences, other markup stripped to its text.
+ * Code blocks (an optional [source,lang] line, then ---- … ---- or a .... literal block) are set aside first, so the
+ * prose clean-up can't touch them: it deletes {Name} tokens and _underscore_ pairs, which turned
+ * XAxisLabel="{}{Name}" into XAxisLabel="{}" and mangled C# fields.
  */
 function stripAdoc(raw: string): string {
+  const code: string[] = [];
+  const prose = raw.replace(/\r\n?/g, '\n').replace(
+    /^(?:\[source(?:\s*,\s*([^\],]*))?[^\]\n]*\][ \t]*\n)?(-{4,}|\.{4,})[ \t]*\n([\s\S]*?)\n\2[ \t]*$/gm,
+    (_, lang: string | undefined, _fence, body: string) => {
+      const key = (lang ?? '').trim().toLowerCase();
+      code.push('```' + (FENCE_LANG[key] ?? key) + '\n' + body + '\n```');
+      return `\u0000${code.length - 1}\u0000`;
+    });
+  return stripProse(prose).replace(/\u0000(\d+)\u0000/g, (_, i) => code[Number(i)]);
+}
+
+function stripProse(raw: string): string {
   return raw
     // ── Remove structural blocks we don't want ───────────────────────────────
     // //// comment blocks (metadata lives here)
@@ -231,8 +303,8 @@ function stripAdoc(raw: string): string {
     // ── Remove formatting-only markers ───────────────────────────────────────
     // Block type annotations: [source, xaml], [NOTE], [TIP], etc.
     .replace(/^\[[^\]]+\]\s*$/gm, '')
-    // AsciiDoc heading markers (= / == / === …) — keep heading text
-    .replace(/^={1,6} /gm, '')
+    // AsciiDoc heading markers (= / == / === …) → Markdown (# / ## / ### …): get_wpf_doc pages at them
+    .replace(/^(={1,6}) /gm, (_, level: string) => '#'.repeat(level.length) + ' ')
     // Table delimiters
     .replace(/^\|====.*$/gm, '')
     .replace(/^\|[-]+.*$/gm, '')
@@ -263,8 +335,13 @@ function processFile(filePath: string, source: 'wpf' | 'common'): DocEntry | nul
   // control names before any parsing, so metadata/title/body all see the
   // resolved text (e.g. "XamCategoryChart" instead of "{CategoryChartName}").
   raw = resolveVars(raw);
+  const conditional = applyConditionals(raw);
+  raw = resolvePicks(conditional.text);
+  droppedChars += conditional.dropped;
+  if (conditional.dropped > 0) topicsTrimmed++;
 
   const meta  = parseMetadata(raw);
+  if (isForOtherPlatforms(meta)) { otherPlatformTopics++; return null; }
   const title = extractTitle(raw);
 
   // Some real topics (the whole financial-chart family, several data-chart ones) carry no
@@ -280,12 +357,25 @@ function processFile(filePath: string, source: 'wpf' | 'common'): DocEntry | nul
   const xamlSnippets = extractXamlSnippets(raw);
   const body         = stripAdoc(raw);
 
-  // Summary: first ~220 printable chars of body
-  const summary = body.replace(/\s+/g, ' ').slice(0, 220).trim();
+  // Summary: first ~220 printable chars of the body, without the Markdown heading and fence markers
+  const summary = body.replace(/^```.*$/gm, '').replace(/^#{1,6} /gm, '').replace(/\s+/g, ' ').slice(0, 220).trim();
 
   if (!title && !summary) return null; // skip empty/broken files
 
-  return { slug, title, controlNames, tags, source, summary, body, xamlSnippets };
+  // The Xam* names the topic mentions (xamDataGrid, XamMaskedInput; not "xaml" or "Xamarin"): search_wpf_docs'
+  // control filter also matches them, since many topics are tagged with a family (xamInputs, xamDataPresenter)
+  // rather than with each control they cover.
+  const mentions: Record<string, number> = {};
+  for (const m of body.matchAll(/\b[Xx]am([A-Z][A-Za-z0-9]*)\b/g)) {
+    const name = `xam${m[1]}`.toLowerCase();
+    mentions[name] = (mentions[name] ?? 0) + 1;
+  }
+
+  return {
+    slug, title, controlNames, tags, source, summary,
+    ...(Object.keys(mentions).length ? { mentions } : {}),
+    body, xamlSnippets,
+  };
 }
 
 // ── File discovery ────────────────────────────────────────────────────────────
@@ -348,6 +438,7 @@ console.log(`Discovered ${files.length} .adoc files  (wpf + common)`);
 
 const index: DocIndexEntry[] = [];
 let skipped = 0;
+let droppedChars = 0, topicsTrimmed = 0, otherPlatformTopics = 0;
 const slugSeen = new Set<string>();
 
 for (const { path, source } of files) {
@@ -393,8 +484,25 @@ assertBuildStep(
   `case-insensitive filesystem, so one would silently overwrite the other.`
 );
 
+// A pick:[…] left in a written topic means resolvePicks' pattern no longer matches the sources' form.
+const unresolvedPicks = index.filter(e => readFileSync(join(OUT_DIR, `${e.slug}.json`), 'utf-8').includes('pick:[')).map(e => e.slug);
+assertBuildStep(unresolvedPicks.length <= 5,
+  `${unresolvedPicks.length} topics still contain pick:[platform="…"] macros (e.g. ${unresolvedPicks.slice(0, 3).join(', ')}): ` +
+  `resolvePicks no longer matches their form, so agents would read every platform's wording, Java and Xamarin included.`
+);
+
+// Fences are what get_wpf_doc's pages keep code apart by; none means the code-block pattern no longer matches.
+const fenced = index.reduce((n, e) => n + (readFileSync(join(OUT_DIR, `${e.slug}.json`), 'utf-8').match(/```/g)?.length ?? 0) / 2, 0);
+assertBuildStep(fenced > 1000,
+  `Only ${fenced} code blocks came out as \`\`\` fences across ${index.length} topics — stripAdoc's code-block pattern ` +
+  `([source,…] + ---- … ----) no longer matches the AsciiDoc sources, so code would reach agents as plain prose again.`
+);
+
 console.log(`\nDone.`);
 console.log(`  Topics written : ${index.length}`);
+console.log(`  Code blocks    : ${fenced}`);
+console.log(`  Other platforms: ${otherPlatformTopics} topics built only for them left out; ${topicsTrimmed} topics lost ` +
+  `${droppedChars} chars of non-WPF ifdef:: blocks (WPF flags: ${[...WPF_FLAGS].join(', ')})`);
 console.log(`  Skipped        : ${skipped}  (no metadata or empty)`);
 console.log(`  Index          : ${INDEX_FILE}`);
 console.log(`  Full content   : ${OUT_DIR}/  (${index.length} files)`);
