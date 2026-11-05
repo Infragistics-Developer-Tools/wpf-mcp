@@ -39,7 +39,7 @@ First run takes 2–5 minutes, almost all of it the NuGet restore and the type e
 A healthy build ends with these counts (they drift slightly between Infragistics versions):
 
 ```
-Registry:     189 Xam* controls → src/data/namespaces.json
+Registry:     183 Xam* controls → src/data/namespaces.json
 Search index: 6907 types → src/data/search-index.json
 Topics written : 2678
 theme-index.json: 8 newer themes, 45 legacy style folders, 822 XAML files total.
@@ -279,7 +279,7 @@ Theme files used to be cut at 24,000 characters, and 436 of the 822 (26.1.21) ar
 
 | File | Size | Loaded | Purpose |
 |---|---|---|---|
-| `dist/data/namespaces.json` | ~50 KB | at startup | 189 Xam* control registry |
+| `dist/data/namespaces.json` | ~50 KB | at startup | 183 Xam* control registry |
 | `dist/data/search-index.json` | ~5 MB | at startup | compact index (`n,s,a,p,m` keys): name, summary, member names |
 | `dist/data/docs-index.json` | ~1 MB | at startup | topic slugs, titles, control names, summaries |
 | `dist/data/theme-index.json` | small | at startup | theme/style files with parsed `targetTypes` |

@@ -22,7 +22,19 @@ public sealed record ApiMemberEntry(
     bool? IsEnum,
     string[]? EnumValues,
     string? DeclaredOn,
-    bool? IsField = null);   // a static ResourceKey/RoutedCommand field, listed with the properties
+    bool? IsField = null,          // a static ResourceKey/RoutedCommand field, listed with the properties
+    string? Signature = null,      // methods, constructors and indexers: "void Export(OutputFormat outputFormat, string fileName)"
+    ParamDoc[]? Parameters = null);
+
+public sealed record ParamDoc(string Name, string Summary);
+
+/// A member marked [Obsolete]: left out of the member lists, kept so a lookup by name gets the replacement.
+public sealed record ObsoleteMember(
+    string Name,
+    string Kind,                   // "property", "event", "method" or "constructor"
+    string Message,                // Infragistics' own, usually naming the replacement
+    string? Signature = null,
+    string? DeclaredOn = null);
 
 public sealed record AlternateType(string FullName, string NugetPackage, int MemberCount);
 
@@ -40,7 +52,10 @@ public sealed record ApiEntry(
     ApiMemberEntry[] Properties,
     ApiMemberEntry[] Events,
     ApiMemberEntry[] Methods,
-    string? XamlName = null);   // nested types only: "Outer+Inner"
+    string? XamlName = null,    // nested types only: "Outer+Inner"
+    ApiMemberEntry[]? Constructors = null,   // public ones that take parameters
+    ObsoleteMember[]? Obsolete = null,
+    string? ObsoleteMessage = null);         // the type itself is [Obsolete]
 
 /// Compact entry in search-index.json — single-letter keys keep the ~5MB index small.
 public sealed record SearchIndexEntry(

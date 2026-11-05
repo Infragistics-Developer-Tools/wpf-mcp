@@ -15,10 +15,17 @@
  *   "__xaml"                    : { "Assembly|Namespace.Type" (nested: "…|Namespace.Outer.Inner") : { xmlns, prefix, ns, xamlName? } }
  *   "__nonPublicTypes"          : [ "Assembly|Namespace.Type", … ]   (internal / private nested types, to leave out)
  *   "__nonPublicMembers"        : [ "Assembly|Namespace.Type.Member", … ]   (internal / private members, to leave out)
+ *   "__members"                 : { "Assembly|<XML doc ID>" : { sig?, params?, overrides?, obsolete?, hidden? } }
+ *                                 (every public / protected method and constructor, with its C# signature and parameter
+ *                                 names; properties, events, fields and the type itself only when they are indexers or
+ *                                 marked obsolete / hidden)
+ *   "__nonPublicMethods"        : [ "Assembly|<XML doc ID>", … ]   (internal / private methods and constructors)
+ *   "__memberTypes"             : [ "Assembly|Namespace.Type", … ]   (types whose members "__members" covers)
  */
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -130,6 +137,9 @@ Console.Error.WriteLine($"[TypeExtractor] phase 1: {knownTypes.Count} types, {en
 var output = new SortedDictionary<string, object?>(StringComparer.Ordinal);
 var baseTypes = new SortedDictionary<string, string>(StringComparer.Ordinal);
 var nonPublicMembers = new SortedSet<string>(StringComparer.Ordinal);
+var members = new SortedDictionary<string, Dictionary<string, object>>(StringComparer.Ordinal);
+var nonPublicMethods = new SortedSet<string>(StringComparer.Ordinal);
+var memberTypes = new SortedSet<string>(StringComparer.Ordinal);
 
 foreach (var asm in loaded) {
     foreach (var t in SafeGetTypes(asm)) {
@@ -162,6 +172,64 @@ foreach (var asm in loaded) {
             foreach (var m in t.GetMethods(declared)) if (!m.IsSpecialName) Note(m.Name, IsUsable(m));
             foreach (var (name, ok) in usable) if (!ok) nonPublicMembers.Add($"{typeKey}.{name}");
         } catch { /* skip inaccessible type: its members stay */ }
+
+        // ── Signatures and flags, keyed by XML doc ID ───────────────────────
+        // The XML docs name a member by its doc ID ("M:Namespace.Type.Load(System.String,System.Boolean)"), which
+        // also tells overloads apart. Reflection adds what the ID can't: return type, parameter names, out vs ref,
+        // defaults. Every public / protected method and constructor gets an entry, and every internal / private one is
+        // listed in "__nonPublicMethods", so build-api can tell an unusable overload from one whose ID didn't match;
+        // properties, events and fields only when they are indexers or marked [Obsolete] / hidden from IntelliSense.
+        // A type that throws here stays out of "__memberTypes", and build-api keeps its members as before.
+        try {
+            const BindingFlags declared = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance |
+                                          BindingFlags.Static | BindingFlags.DeclaredOnly;
+            var asmName = asm.GetName().Name;
+            var typeId = DocTypeId(t);
+            void Add(string docId, MemberInfo m, string? sig) {
+                try {
+                    var entry = MemberEntry(m, sig);
+                    if (entry.Count > 0) members[$"{asmName}|{docId}"] = entry;
+                } catch { /* unreadable attributes or signature: the member stays name-only */ }
+            }
+            var methods = new List<(string Id, MethodBase M, string Sig)>();
+            foreach (var m in t.GetMethods(declared).Cast<MethodBase>().Concat(t.GetConstructors(declared))) {
+                if (m is ConstructorInfo && m.IsStatic) continue;
+                // Property / event accessors and explicit interface implementations ("IList.Add") aren't called by name.
+                if (m is MethodInfo && (m.Name.Contains('.') || (m.IsSpecialName && !m.Name.StartsWith("op_", StringComparison.Ordinal)))) continue;
+                if (!IsUsable(m)) {
+                    try { nonPublicMethods.Add($"{asmName}|{MethodDocId(typeId, m)}"); } catch { /* unreadable: stays unmatched */ }
+                    continue;
+                }
+                try { methods.Add((MethodDocId(typeId, m), m, MethodSignature(m))); } catch { /* unreadable signature: name-only */ }
+            }
+            // Overloads that differ only in a type's namespace (WorkbookColorInfo(System.Drawing.Color) and
+            // (System.Windows.Media.Color)) would read the same: those spell their types in full.
+            var ambiguous = methods.GroupBy(x => x.Sig).Where(g => g.Count() > 1).SelectMany(g => g).Select(x => x.Id).ToHashSet();
+            foreach (var (id, m, sig) in methods) {
+                string full;
+                try { full = ambiguous.Contains(id) ? MethodSignature(m, qualified: true) : sig; } catch { full = sig; }
+                Add(id, m, full);
+                if (!members.TryGetValue($"{asmName}|{id}", out var entry)) continue;
+                // The names build-api matches the XML's <param> descriptions against, read here rather than parsed
+                // back out of the signature.
+                var ps = m.GetParameters();
+                if (ps.Length > 0) entry["params"] = ps.Select((p, i) => p.Name ?? $"arg{i}").ToArray();
+                try {
+                    if (m is MethodInfo mi && OverriddenTail(mi, id[(typeId.Length + 3)..]) is { } overridden) entry["overrides"] = overridden;
+                } catch { /* unreadable base method: inherited by overload as before */ }
+            }
+            foreach (var p in t.GetProperties(declared)) {
+                if (!(IsUsable(p.GetMethod) || IsUsable(p.SetMethod)) || p.Name.Contains('.')) continue;
+                var index = p.GetIndexParameters();
+                var id = $"P:{typeId}.{p.Name}" + (index.Length > 0 ? $"({string.Join(",", index.Select(x => ParamId(x.ParameterType)))})" : "");
+                Add(id, p, index.Length > 0 ? IndexerSignature(p, index) : null);
+            }
+            foreach (var e in t.GetEvents(declared)) if (IsUsable(e.AddMethod) && !e.Name.Contains('.')) Add($"E:{typeId}.{e.Name}", e, null);
+            foreach (var f in t.GetFields(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly))
+                Add($"F:{typeId}.{f.Name}", f, null);
+            Add($"T:{typeId}", t, null);   // the type itself, when it is [Obsolete] (UnboundField) or hidden
+            memberTypes.Add(typeKey);
+        } catch { /* skip inaccessible type: build-api keeps its members name-only */ }
 
         if (!topLevel) continue;
 
@@ -209,7 +277,14 @@ foreach (var asm in loaded) {
 
 output["__baseTypes"] = baseTypes;
 output["__nonPublicMembers"] = nonPublicMembers;
+output["__members"] = members;
+output["__nonPublicMethods"] = nonPublicMethods;
+output["__memberTypes"] = memberTypes;
 Console.Error.WriteLine($"[TypeExtractor] phase 2: {output.Count} entries, {baseTypes.Count} base types, {nonPublicMembers.Count} non-public members");
+Console.Error.WriteLine($"[TypeExtractor] phase 2: {members.Count(m => m.Value.ContainsKey("sig"))} signatures, " +
+    $"{members.Count(m => m.Value.ContainsKey("overrides"))} overrides of a generic base's method, " +
+    $"{members.Count(m => m.Value.ContainsKey("obsolete"))} obsolete, {members.Count(m => m.Value.ContainsKey("hidden"))} hidden members, " +
+    $"{nonPublicMethods.Count} non-public methods, {memberTypes.Count} types covered");
 
 // ── Non-public types ─────────────────────────────────────────────────────────
 // The XML docs also document internal and private nested classes (ActivePaneManager, XamFunnelController, …),
@@ -411,6 +486,154 @@ static bool IsInfragisticsDll(string filename) {
 
 // Callable from an app: public, or protected (from a subclass). Not internal, private or private protected.
 static bool IsUsable(MethodBase? m) => m != null && (m.IsPublic || m.IsFamily || m.IsFamilyOrAssembly);
+
+// ── XML doc IDs (the "name" attribute of each <member> in the XML docs) ──────
+
+// A type in declaration form: Namespace.Outer`1.Inner
+static string DocTypeId(Type t) =>
+    t.IsNested ? $"{DocTypeId(t.DeclaringType!)}.{t.Name}" : (string.IsNullOrEmpty(t.Namespace) ? "" : t.Namespace + ".") + t.Name;
+
+static string MethodDocId(string typeId, MethodBase m) {
+    var id = $"M:{typeId}.{(m is ConstructorInfo ? "#ctor" : m.Name)}";
+    if (m.IsGenericMethodDefinition) id += $"``{m.GetGenericArguments().Length}";
+    var ps = m.GetParameters();
+    if (ps.Length > 0) id += $"({string.Join(",", ps.Select(p => ParamId(p.ParameterType)))})";
+    if (m.Name is "op_Implicit" or "op_Explicit") id += "~" + ParamId(((MethodInfo)m).ReturnType);
+    return id;
+}
+
+// For an override of a generic base type's method, the doc ID tail of the method it overrides: the base declares
+// "InsertItem(System.Int32,`0)", the override "InsertItem(System.Int32,Ns.Column)", so build-api can't tell from the
+// IDs alone that one replaces the other. Null when the tails are the same or the method overrides nothing.
+static string? OverriddenTail(MethodInfo m, string ownTail) {
+    var root = m.GetBaseDefinition();
+    if (root.DeclaringType is not { } rootType || rootType == m.DeclaringType) return null;
+    if (rootType.IsGenericType && !rootType.IsGenericTypeDefinition) {
+        // The ID is written against the type definition (`0), not the closed base (CollectionBase<Column>).
+        rootType = rootType.GetGenericTypeDefinition();
+        root = rootType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static |
+                                   BindingFlags.DeclaredOnly).First(x => x.MetadataToken == root.MetadataToken && x.Module == root.Module);
+    }
+    var rootTypeId = DocTypeId(rootType);
+    var rootTail = MethodDocId(rootTypeId, root)[(rootTypeId.Length + 3)..];
+    return rootTail == ownTail ? null : rootTail;
+}
+
+// A type inside a doc ID's parameter list: generic types as Name{Arg,…} (also a generic type naming itself, which
+// reflection returns as its definition), `N / ``N for the type's / method's generic parameters, @ by-ref, * pointer,
+// [] and [0:,0:] arrays.
+static string ParamId(Type t) {
+    if (t.IsByRef) return ParamId(t.GetElementType()!) + "@";
+    if (t.IsPointer) return ParamId(t.GetElementType()!) + "*";
+    if (t.IsArray) return ParamId(t.GetElementType()!) + (t.IsSZArray ? "[]" : $"[{string.Join(",", Enumerable.Repeat("0:", t.GetArrayRank()))}]");
+    if (t.IsGenericParameter) return (t.DeclaringMethod != null ? "``" : "`") + t.GenericParameterPosition;
+    if (!t.IsGenericType) return DocTypeId(t);
+    // Each nesting level names its own share of the arguments: Outer{`0}.Inner{`1}.
+    var args = t.GetGenericArguments();
+    var chain = new List<Type>();
+    for (var x = t.IsGenericTypeDefinition ? t : t.GetGenericTypeDefinition(); x != null; x = x.IsNested ? x.DeclaringType : null) chain.Insert(0, x);
+    var id = string.IsNullOrEmpty(chain[0].Namespace) ? "" : chain[0].Namespace + ".";
+    var used = 0;
+    for (var i = 0; i < chain.Count; i++) {
+        var name = chain[i].Name;
+        var tick = name.IndexOf('`');
+        var own = tick < 0 ? 0 : int.Parse(name[(tick + 1)..], CultureInfo.InvariantCulture);
+        id += (i > 0 ? "." : "") + (tick < 0 ? name : name[..tick]);
+        if (own > 0) { id += "{" + string.Join(",", args.Skip(used).Take(own).Select(ParamId)) + "}"; used += own; }
+    }
+    return id;
+}
+
+// ── C# signatures, as an app would write the call ────────────────────────────
+
+static Dictionary<string, object> MemberEntry(MemberInfo m, string? sig) {
+    var entry = new Dictionary<string, object>();
+    if (sig != null) entry["sig"] = sig;
+    // Read as attribute data: constructing the attributes could fail for a type whose dependencies don't load.
+    foreach (var a in m.GetCustomAttributesData()) {
+        if (a.AttributeType.FullName == "System.ObsoleteAttribute")
+            entry["obsolete"] = a.ConstructorArguments.Count > 0 ? a.ConstructorArguments[0].Value as string ?? "" : "";
+        else if (a.AttributeType.FullName == "System.ComponentModel.EditorBrowsableAttribute" &&
+                 a.ConstructorArguments.Count > 0 && Convert.ToInt32(a.ConstructorArguments[0].Value, CultureInfo.InvariantCulture) == 1)
+            entry["hidden"] = true;   // EditorBrowsableState.Never
+    }
+    return entry;
+}
+
+static string MethodSignature(MethodBase m, bool qualified = false) {
+    var modifiers = (m.IsPublic ? "" : "protected ") + (m.IsStatic ? "static " : "");
+    var ps = FormatParameters(m.GetParameters(), m.IsDefined(typeof(System.Runtime.CompilerServices.ExtensionAttribute), false), qualified);
+    if (m is ConstructorInfo) return $"{modifiers}{m.DeclaringType!.Name.Split('`')[0]}({ps})";
+    var mi = (MethodInfo)m;
+    var ret = TypeDisplayName(mi.ReturnType, qualified);
+    if (mi.Name is "op_Implicit" or "op_Explicit") return $"{modifiers}{(mi.Name == "op_Implicit" ? "implicit" : "explicit")} operator {ret}({ps})";
+    if (OperatorSymbol(mi.Name) is { } symbol) return $"{modifiers}{ret} operator {symbol}({ps})";
+    var generic = mi.IsGenericMethodDefinition ? $"<{string.Join(", ", mi.GetGenericArguments().Select(a => a.Name))}>" : "";
+    return $"{modifiers}{ret} {mi.Name}{generic}({ps})";
+}
+
+static string IndexerSignature(PropertyInfo p, ParameterInfo[] index) =>
+    $"{(p.GetMethod?.IsPublic == true || p.SetMethod?.IsPublic == true ? "" : "protected ")}{TypeDisplayName(p.PropertyType)} this[{FormatParameters(index, false)}]";
+
+static string FormatParameters(ParameterInfo[] ps, bool isExtension, bool qualified = false) => string.Join(", ", ps.Select((p, i) => {
+    var modifier = i == 0 && isExtension ? "this " : "";
+    if (p.ParameterType.IsByRef) modifier += p.IsOut ? "out " : p.IsIn ? "in " : "ref ";
+    else if (p.IsDefined(typeof(ParamArrayAttribute), false)) modifier += "params ";
+    var text = $"{modifier}{TypeDisplayName(p.ParameterType, qualified)} {p.Name ?? $"arg{i}"}";
+    string? value = null;
+    try { if (p.HasDefaultValue) value = FormatDefault(p); } catch { /* an unreadable default is left out */ }
+    return value == null ? text : $"{text} = {value}";
+}));
+
+static string? FormatDefault(ParameterInfo p) {
+    var v = p.DefaultValue;
+    var type = Nullable.GetUnderlyingType(p.ParameterType) ?? p.ParameterType;
+    if (v == null) return p.ParameterType.IsValueType && Nullable.GetUnderlyingType(p.ParameterType) == null ? "default" : "null";
+    if (type.IsEnum) {
+        var name = Enum.GetName(type, v);
+        return name != null ? $"{TypeDisplayName(type)}.{name}" : $"({TypeDisplayName(type)}){Convert.ToInt64(v, CultureInfo.InvariantCulture)}";
+    }
+    return v switch {
+        string s => $"\"{s.Replace("\\", "\\\\").Replace("\"", "\\\"")}\"",
+        bool b => b ? "true" : "false",
+        char c => $"'{c}'",
+        IFormattable f => f.ToString(null, CultureInfo.InvariantCulture),
+        _ => v.ToString(),
+    };
+}
+
+// C# spelling of a type: keywords for built-ins, T? for Nullable<T>, Outer.Inner for nested types, no namespaces
+// unless qualified.
+static string TypeDisplayName(Type t, bool qualified = false) {
+    if (t.IsByRef) return TypeDisplayName(t.GetElementType()!, qualified);
+    if (t.IsPointer) return TypeDisplayName(t.GetElementType()!, qualified) + "*";
+    if (t.IsArray) return $"{TypeDisplayName(t.GetElementType()!, qualified)}[{new string(',', t.GetArrayRank() - 1)}]";
+    if (Nullable.GetUnderlyingType(t) is { } underlying) return TypeDisplayName(underlying, qualified) + "?";
+    if (t.IsGenericParameter) return t.Name;
+    var keyword = t.FullName switch {
+        "System.String" => "string", "System.Boolean" => "bool", "System.Int32" => "int", "System.Int64" => "long",
+        "System.Int16" => "short", "System.Byte" => "byte", "System.SByte" => "sbyte", "System.UInt16" => "ushort",
+        "System.UInt32" => "uint", "System.UInt64" => "ulong", "System.Double" => "double", "System.Single" => "float",
+        "System.Decimal" => "decimal", "System.Char" => "char", "System.Object" => "object", "System.Void" => "void",
+        _ => null,
+    };
+    if (keyword != null) return keyword;
+    static string Plain(Type x) => (x.IsNested ? Plain(x.DeclaringType!) + "." : "") + x.Name.Split('`')[0];
+    var tick = t.Name.IndexOf('`');
+    var own = tick < 0 ? 0 : int.Parse(t.Name[(tick + 1)..], CultureInfo.InvariantCulture);
+    var args = own > 0 ? $"<{string.Join(", ", t.GetGenericArguments().TakeLast(own).Select(a => TypeDisplayName(a, qualified)))}>" : "";
+    return (qualified && !string.IsNullOrEmpty(t.Namespace) ? t.Namespace + "." : "") + Plain(t) + args;
+}
+
+static string? OperatorSymbol(string name) => name switch {
+    "op_Addition" => "+", "op_Subtraction" => "-", "op_Multiply" => "*", "op_Division" => "/", "op_Modulus" => "%",
+    "op_Equality" => "==", "op_Inequality" => "!=", "op_LessThan" => "<", "op_GreaterThan" => ">",
+    "op_LessThanOrEqual" => "<=", "op_GreaterThanOrEqual" => ">=", "op_UnaryNegation" => "-", "op_UnaryPlus" => "+",
+    "op_LogicalNot" => "!", "op_OnesComplement" => "~", "op_Increment" => "++", "op_Decrement" => "--",
+    "op_True" => "true", "op_False" => "false", "op_BitwiseAnd" => "&", "op_BitwiseOr" => "|", "op_ExclusiveOr" => "^",
+    "op_LeftShift" => "<<", "op_RightShift" => ">>",
+    _ => null,
+};
 
 static bool IsInfragisticsPublic(Type t) =>
     t.IsPublic &&

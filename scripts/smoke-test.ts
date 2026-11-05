@@ -100,6 +100,10 @@ async function main(): Promise<void> {
     r = await call('list_wpf_components', { filter: 'Funnel' });
     text = textOf(r);
     check('internal classes are not listed as controls', !r.isError && text.includes('XamFunnelChart') && !text.includes('XamFunnelController') && !text.includes('XamFunnelConnector'), text.slice(0, 300));
+    // Types hidden from IntelliSense are Infragistics' own plumbing (the sparkline's drawing part), not controls to use.
+    r = await call('list_wpf_components', { filter: 'Sparkline' });
+    text = textOf(r);
+    check('types hidden from IntelliSense are not listed as controls', !r.isError && text.includes('XamSparkline') && !text.includes('XamSparklineView'), text.slice(0, 300));
 
     console.log('get_wpf_api_reference');
     r = await call('get_wpf_api_reference', { component: 'XamDataGrid', kind: 'all' });
@@ -128,6 +132,8 @@ async function main(): Promise<void> {
     // Internal classes have no page, and a name an internal class used to win now documents the public class.
     r = await call('get_wpf_api_reference', { component: 'ActivePaneManager' });
     check('internal class has no API page', r.isError === true, textOf(r).slice(0, 200));
+    r = await call('get_wpf_api_reference', { component: 'XamSparklineView' });
+    check('type hidden from IntelliSense has no API page', r.isError === true, textOf(r).slice(0, 200));
     r = await call('get_wpf_api_reference', { component: 'DashboardTileGroupDescription' });
     text = textOf(r);
     check('public type wins its name over an internal one',
@@ -183,6 +189,44 @@ async function main(): Promise<void> {
       check('member filter accepts 128 characters', !r.isError && textOf(r).includes('No members whose name contains'), textOf(r).slice(0, 200));
       r = await call('get_wpf_api_reference', { component: 'XamCategoryChart', member: 'x'.repeat(129) });
       check('member over 128 characters → isError naming the limit', r.isError === true && textOf(r).includes('max 128 characters'), textOf(r).slice(0, 200));
+      // Methods carry their C# signature, one line per overload; with `member`, also the parameter descriptions,
+      // which tell overloads with the same summary apart ("XPS only" is what an agent needs before trying PDF).
+      r = await call('get_wpf_api_reference', { component: 'Report', member: 'Export' });
+      text = textOf(r);
+      check('overloads show their signatures and parameter descriptions',
+        !r.isError && text.includes('- `void Export(OutputFormat outputFormat, string fileName)`:') && text.includes('  - `outputFormat`: The output document type (XPS only).'),
+        text.slice(0, 400));
+      // Constructors that take parameters are listed; [Obsolete] ones only come back as a notice.
+      r = await call('get_wpf_api_reference', { component: 'Workbook', member: 'Workbook' });
+      text = textOf(r);
+      check('constructors are listed, obsolete ones as a notice',
+        !r.isError && text.includes('### Constructors\n- `Workbook(WorkbookFormat format)`:') && text.includes('⚠ OBSOLETE constructor `Workbook(WorkbookPaletteMode paletteMode)`'),
+        text.slice(0, 400));
+      // An [Obsolete] member isn't listed, but looking it up gets the replacement (8 docs topics still set HorizontalZoomable).
+      r = await call('get_wpf_api_reference', { component: 'XamDataChart', member: 'HorizontalZoomable' });
+      text = textOf(r);
+      check('obsolete member lookup names the replacement',
+        !r.isError && text.includes('⚠ OBSOLETE property `XamDataChart.HorizontalZoomable`: Please use the IsHorizontalZoomEnabled property.') && !text.includes('**HorizontalZoomable**'),
+        text.slice(0, 400));
+      // An [Obsolete] type keeps its page but leads with the replacement (3 docs topics still use UnboundField).
+      r = await call('get_wpf_api_reference', { component: 'UnboundField', kind: 'events' });
+      check('obsolete type page leads with the replacement', !r.isError && textOf(r).includes('⚠ **OBSOLETE type:** Use Field'), textOf(r).slice(0, 300));
+      // Obsolete member names stay searchable, so an agent following old docs still finds the type and its note.
+      r = await call('search_wpf_api', { query: 'HorizontalZoomable', limit: 3 });
+      check('obsolete member names stay searchable', !r.isError && textOf(r).includes('XamDataChart'), textOf(r).slice(0, 300));
+      // Compacted lists name an overloaded method once, with its count.
+      r = await call('get_wpf_api_reference', { component: 'XamDataGrid' });
+      check('compacted lists show an overloaded method once with its count', !r.isError && textOf(r).includes('`LoadCustomizations` (8)'), textOf(r).slice(0, 200));
+      // An override of a generic base type's method replaces it: CollectionBase<T>.Insert(int, T) isn't listed again.
+      r = await call('get_wpf_api_reference', { component: 'ColumnBaseCollection', member: 'Insert' });
+      text = textOf(r);
+      check('an override of a generic base method is listed once',
+        !r.isError && text.includes('- `void Insert(int index, ColumnBase item)`:') && !text.includes('void Insert(int index, T item)'),
+        text.slice(0, 400));
+      // A member a subtype re-declares hidden from IntelliSense isn't inherited from the base either.
+      r = await call('get_wpf_api_reference', { component: 'TemplateColumn', member: 'ValueConverter' });
+      check('a member hidden on the subtype is not inherited from the base',
+        !r.isError && textOf(r).includes('No members whose name contains "ValueConverter"'), textOf(r).slice(0, 400));
     }
     r = await call('get_wpf_api_reference', { component: 'xamdatagrid', kind: 'events' });
     check('case-insensitive lookup + kind filter', !r.isError && textOf(r).includes('# XamDataGrid'));
