@@ -282,6 +282,11 @@ async function main(): Promise<void> {
       check('long topic pages with balanced fences', !r.isError && /comes in \d+ pages/.test(text) && text.includes('this is page 2') && (text.match(/^```/gm)?.length ?? 1) % 2 === 0, text.slice(0, 300));
       r = await call('get_wpf_doc', { topic: 'resources-customtheme.xamtilemanager', page: 99 });
       check('page out of range → isError', r.isError === true && textOf(r).includes('out of range'), textOf(r).slice(0, 200));
+      // [Range(1, 100)] isn't enforced by the SDK: page 0 is out of range too, for long and one-page topics alike.
+      r = await call('get_wpf_doc', { topic: 'resources-customtheme.xamtilemanager', page: 0 });
+      check('page 0 → out-of-range isError', r.isError === true && textOf(r).includes('page 0 is out of range'), textOf(r).slice(0, 200));
+      r = await call('get_wpf_doc', { topic: 'adding-an-assembly-to-an-expression-blend-project', page: 0 });
+      check('page 0 of a one-page topic → out-of-range isError', r.isError === true && textOf(r).includes('page 0 is out of range'), textOf(r).slice(0, 200));
     }
     r = await call('get_wpf_doc', { topic: 'no-such-topic-slug' });
     check('unknown slug → isError', r.isError === true);

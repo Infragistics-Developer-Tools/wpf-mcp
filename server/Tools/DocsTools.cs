@@ -224,9 +224,11 @@ public sealed class DocsTools(DataStore store, ToolLog log)
             return isError ? ToolResult.Error(text) : ToolResult.Text(text);
         }
         // The body is the topic in Markdown, its code samples (XAML, C#, VB) in ``` fences.
+        // [Range] only describes the schema: page 0 or below is out of range like a page past the end.
+        var n = page ?? 1;
         if (doc.Body.Length <= MaxDocChars)
         {
-            if (page is > 1) return Respond($"page {page} is out of range: \"{doc.Slug}\" fits in one response (page: 1).", isError: true);
+            if (n != 1) return Respond($"page {n} is out of range: \"{doc.Slug}\" fits in one response (page: 1).", isError: true);
             return Respond(string.Join('\n', output.Concat(["", doc.Body])));
         }
 
@@ -234,10 +236,9 @@ public sealed class DocsTools(DataStore store, ToolLog log)
         // (one topic is a 600-line XAML listing under a single heading).
         var pages = XamlPages.Paginate(
             Sections(doc.Body).SelectMany(s => s.Text.Length <= DocPageChars
-                ? [s] : s.Text.Split('\n').Select((line, i) => (Text: line + "\n", Label: i == 0 ? s.Label : ""))),
+                ? [s] : XamlPages.Lines(s.Text, DocPageChars).Select((line, i) => (Text: line, Label: i == 0 ? s.Label : ""))),
             DocPageChars);
-        var n = page ?? 1;
-        if (n > pages.Count)
+        if (n < 1 || n > pages.Count)
             return Respond($"page {n} is out of range: \"{doc.Slug}\" has {pages.Count} pages (page: 1 to {pages.Count}).", isError: true);
         // A code block that runs across pages is closed at the end of one and reopened, language included, at the
         // start of the next, so each page is valid Markdown.
