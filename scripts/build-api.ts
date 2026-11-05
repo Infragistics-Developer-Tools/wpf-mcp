@@ -265,7 +265,7 @@ interface TypeInfoEntry {
 interface XamlTypeInfo { xmlns: string; prefix: string; ns: string; xamlName?: string }
 
 /** What reflection says about one member, keyed by "Assembly|<XML doc ID>" (see "__members" in type-extractor/Program.cs). */
-interface MemberMeta { sig?: string; obsolete?: string; hidden?: boolean }
+interface MemberMeta { sig?: string; params?: string[]; overrides?: string; obsolete?: string; hidden?: boolean }
 
 function loadTypeInfo(): Record<string, TypeInfoEntry | string> {
   const path = join(ROOT, 'nuget', 'type-info.json');
@@ -302,12 +302,13 @@ function loadTypeInfo(): Record<string, TypeInfoEntry | string> {
 /**
  * The extractor's maps keyed by "Assembly|Namespace.Type" (nested: "…|Namespace.Outer.Inner"), so types that share
  * a short name can't overwrite each other: each type's XAML namespace and prefix, its Infragistics base type, the
- * types and members ("…|Namespace.Type.Member") that are not public, and signatures and [Obsolete] / hidden flags
- * by doc ID ("…|M:Namespace.Type.Load(System.String)") for the types in memberTypes.
+ * types and members ("…|Namespace.Type.Member") that are not public, signatures and [Obsolete] / hidden flags by
+ * doc ID ("…|M:Namespace.Type.Load(System.String)") for the types in memberTypes, and the doc IDs of their internal /
+ * private methods and constructors.
  */
 function loadExtractorMaps(): {
   xaml: Record<string, XamlTypeInfo>; baseTypes: Record<string, string>; nonPublic: Set<string>; nonPublicMembers: Set<string>;
-  members: Record<string, MemberMeta>; memberTypes: Set<string>;
+  members: Record<string, MemberMeta>; nonPublicMethods: Set<string>; memberTypes: Set<string>;
 } {
   const parsed = JSON.parse(readFileSync(join(ROOT, 'nuget', 'type-info.json'), 'utf-8'));
   const xaml = parsed.__xaml as Record<string, XamlTypeInfo> | undefined;
@@ -315,39 +316,34 @@ function loadExtractorMaps(): {
   const nonPublic = parsed.__nonPublicTypes as string[] | undefined;
   const nonPublicMembers = parsed.__nonPublicMembers as string[] | undefined;
   const members = parsed.__members as Record<string, MemberMeta> | undefined;
+  const nonPublicMethods = parsed.__nonPublicMethods as string[] | undefined;
   const memberTypes = parsed.__memberTypes as string[] | undefined;
   assertBuildStep(!!xaml && Object.keys(xaml).length > 0 && !!baseTypes && Object.keys(baseTypes).length > 0 &&
-    !!nonPublic?.length && !!nonPublicMembers?.length && !!members && Object.keys(members).length > 0 && !!memberTypes?.length,
+    !!nonPublic?.length && !!nonPublicMembers?.length && !!members && Object.keys(members).length > 0 &&
+    !!nonPublicMethods?.length && !!memberTypes?.length,
     `nuget/type-info.json has no "__xaml" / "__baseTypes" / "__nonPublicTypes" / "__nonPublicMembers" / "__members" / ` +
-    `"__memberTypes" section — it was written by an older type extractor, so every type would get a guessed xmlns, no ` +
-    `inherited members, internal classes and members would be indexed as usable, and methods would have no signatures. ` +
-    `Run: npm run generate:types`
+    `"__nonPublicMethods" / "__memberTypes" section — it was written by an older type extractor, so every type would get ` +
+    `a guessed xmlns, no inherited members, internal classes and members would be indexed as usable, and methods would ` +
+    `have no signatures. Run: npm run generate:types`
   );
   return {
     xaml: xaml!, baseTypes: baseTypes!, nonPublic: new Set(nonPublic), nonPublicMembers: new Set(nonPublicMembers),
-    members: members!, memberTypes: new Set(memberTypes),
+    members: members!, nonPublicMethods: new Set(nonPublicMethods), memberTypes: new Set(memberTypes),
   };
 }
 
-// Parameter names in a signature's outermost (…) or […]: "void Load(string name, bool strict = false)" → name, strict.
-function signatureParamNames(signature: string): string[] {
-  const open = signature.search(/[(\[]/);
-  if (open < 0) return [];
-  const names: string[] = [];
-  let depth = 0, current = '';
-  for (const ch of signature.slice(open + 1, -1)) {
-    if ('<([{'.includes(ch)) depth++;
-    else if ('>)]}'.includes(ch)) depth--;
-    if (ch === ',' && depth === 0) { names.push(current); current = ''; } else current += ch;
-  }
-  if (current.trim()) names.push(current);
-  return names.map(p => p.split(' = ')[0].trim().split(' ').pop()!);
-}
-
 // A method's overload, as the tail of its doc ID ("Export(Infragistics.Windows.Reporting.OutputFormat,System.String)"):
-// an override has the same one as the base method, a sibling overload doesn't. Kept off the entries, so not written.
+// an override has the same one as the base method, a sibling overload doesn't. Except an override of a generic base
+// type's method ("InsertItem(System.Int32,Ns.Column)" for "InsertItem(System.Int32,`0)"), which also gets the tail of
+// the method it overrides from the extractor. Kept off the entries, so not written.
 const overloadKeys = new WeakMap<ApiMemberEntry, string>();
+const overriddenKeys = new WeakMap<ApiMemberEntry, string>();
 const overloadKey = (m: ApiMemberEntry) => overloadKeys.get(m) ?? m.name;
+const methodKeys = (m: ApiMemberEntry) => [overloadKey(m), ...(overriddenKeys.has(m) ? [overriddenKeys.get(m)!] : [])];
+
+// Members a type re-declares as [Obsolete] or hidden from IntelliSense ("property|Formula", "method|Clear()"): not
+// listed as current, and the base type's version isn't inherited either (TemplateColumn hides Column.ValueConverter).
+const redeclared = new WeakMap<ApiEntry, string[]>();
 
 /**
  * Second pass: enrich every entry in-memory with inherited Infragistics members.
@@ -372,8 +368,16 @@ function enrichWithInheritance(
     const knownProps  = new Set(entry.properties.map(p => p.name));
     const knownEvents = new Set(entry.events.map(e => e.name));
     // By overload, not name: a type that declares one Export overload still inherits the base type's other ones.
-    const knownMethods = new Set(entry.methods.map(overloadKey));
+    const knownMethods = new Set(entry.methods.flatMap(methodKeys));
     const knownObsolete = new Set((entry.obsolete ?? []).map(o => `${o.kind}|${o.signature ?? o.name}`));
+    // A member re-declared [Obsolete] or hidden on a type hides every further base type's version of it.
+    const block = (e: ApiEntry) => {
+      for (const k of redeclared.get(e) ?? []) {
+        const at = k.indexOf('|'), kind = k.slice(0, at), key = k.slice(at + 1);
+        (kind === 'property' ? knownProps : kind === 'event' ? knownEvents : knownMethods).add(key);
+      }
+    };
+    block(entry);
     const visited = new Set<string>([fullKey(entry)]);
     let added = false;
     let current = fullKey(entry);
@@ -400,11 +404,12 @@ function enrichWithInheritance(
         knownEvents.add(e.name);
         added = true;
       }
-      for (const m of baseEntry.methods.filter(m => !m.declaredOn && !knownMethods.has(overloadKey(m)))) {
+      for (const m of baseEntry.methods.filter(m => !m.declaredOn && !methodKeys(m).some(k => knownMethods.has(k)))) {
         const copy = { ...m, declaredOn: base };
         overloadKeys.set(copy, overloadKey(m));
+        if (overriddenKeys.has(m)) overriddenKeys.set(copy, overriddenKeys.get(m)!);
         entry.methods.push(copy);
-        knownMethods.add(overloadKey(m));
+        for (const k of methodKeys(m)) knownMethods.add(k);
         added = true;
       }
       // Obsolete members are inherited too, so looking one up on a subtype still gets its replacement.
@@ -414,6 +419,7 @@ function enrichWithInheritance(
         (entry.obsolete ??= []).push({ ...o, declaredOn: base });
         knownObsolete.add(`${o.kind}|${o.signature ?? o.name}`);
       }
+      block(baseEntry);
       current = baseKey;
     }
 
@@ -428,10 +434,11 @@ async function generate() {
   mkdirSync(API_OUT_DIR, { recursive: true });
 
   const typeInfo = loadTypeInfo();
-  const { xaml: xamlTypes, baseTypes, nonPublic, nonPublicMembers, members: memberMeta, memberTypes } = loadExtractorMaps();
+  const { xaml: xamlTypes, baseTypes, nonPublic, nonPublicMembers, members: memberMeta, nonPublicMethods, memberTypes } = loadExtractorMaps();
   let skippedNonPublic = 0, skippedNonPublicMembers = 0, skippedObsolete = 0, skippedHidden = 0;
   const hiddenTypes: string[] = [];
   let methodsKept = 0, methodsSigned = 0;
+  const unmatchedMethods: string[] = [];
   const uncoveredTypes: string[] = [];
   // Prefix per xmlns, for the few types the extractor has no entry for (generics, DLLs left out of XAML resolution).
   const prefixByXmlns = new Map(Object.values(xamlTypes).map(x => [x.xmlns, x.prefix]));
@@ -531,12 +538,13 @@ async function generate() {
       const withSignature = (m: RawMember, name: string): ApiMemberEntry => {
         const signature = meta(m)?.sig;
         // The XML docs sometimes describe a parameter that was renamed or removed ("func" for funct): left out.
-        const real = signature ? new Set(signatureParamNames(signature)) : undefined;
+        const real = signature ? new Set(meta(m)?.params ?? []) : undefined;
         const parameters = m.params?.filter(p => !real || real.has(p.name));
         const entry: ApiMemberEntry = {
           name, summary: m.summary, ...(signature ? { signature } : {}), ...(parameters?.length ? { parameters } : {}),
         };
         overloadKeys.set(entry, m.fullName.slice(type.fullName.length + 1));
+        if (meta(m)?.overrides) overriddenKeys.set(entry, meta(m)!.overrides!);
         return entry;
       };
       // The XML docs also document members no app can call: internal / private ones (ValueEditor.InternalIsInitialized),
@@ -546,7 +554,7 @@ async function generate() {
         if ((m.name.includes('#') && m.name !== '#ctor') ||
             nonPublicMembers.has(`${assemblyName}|${type.fullName}.${m.name.replace(/``\d+$/, '')}`) ||
             // Checked per overload: one public Load overload doesn't make an internal one usable.
-            (m.kind === 'M' && covered && !meta(m))) {
+            (m.kind === 'M' && nonPublicMethods.has(`${assemblyName}|M:${m.fullName}`))) {
           skippedNonPublicMembers++;
           return false;
         }
@@ -567,7 +575,8 @@ async function generate() {
       const fields = bucket.fields.filter(usable).filter(m => (withTypeInfo(m) as ApiMemberEntry).isField === true);
       const events = bucket.events.filter(usable);
       const rawMethods = bucket.methods.filter(usable);
-      const rawCtors = bucket.ctors.filter(usable).filter(isUsefulCtor);
+      const usableCtors = bucket.ctors.filter(usable);
+      const rawCtors = usableCtors.filter(isUsefulCtor);
 
       const obsolete: ObsoleteMember[] = [
         ...[...props, ...fields].map(m => ({ m, kind: 'property' as const, name: m.name })),
@@ -579,7 +588,12 @@ async function generate() {
       }));
       const methods = rawMethods.filter(current).map(m => withSignature(m, methodName(m)));
       const constructors = rawCtors.filter(current).map(m => withSignature(m, ctorName));
-      methodsKept += methods.length + constructors.length;
+      // A method or constructor of a type the extractor read that has neither a signature nor a non-public entry: the
+      // doc ID it generated didn't match the XML's. Methods stay listed by name, and both count against the signature
+      // gate below, so a mismatch fails the build instead of quietly dropping them.
+      const unmatched = covered ? [...rawMethods, ...usableCtors].filter(m => !meta(m)) : [];
+      unmatchedMethods.push(...unmatched.map(m => m.fullName));
+      methodsKept += methods.length + constructors.length + unmatched.filter(m => m.name === '#ctor').length;
       methodsSigned += [...methods, ...constructors].filter(m => m.signature).length;
 
       const entry: ApiEntry = {
@@ -602,6 +616,14 @@ async function generate() {
         ...(memberMeta[`${assemblyName}|T:${type.fullName}`]?.obsolete !== undefined
           ? { obsoleteMessage: memberMeta[`${assemblyName}|T:${type.fullName}`].obsolete } : {}),
       };
+      const flagged = (m: RawMember) => meta(m)?.obsolete !== undefined || !!meta(m)?.hidden;
+      const hiddenOrObsolete = [
+        ...[...props, ...fields].filter(flagged).map(m => `property|${m.name}`),
+        ...events.filter(flagged).map(m => `event|${m.name}`),
+        ...rawMethods.filter(flagged).flatMap(m => [m.fullName.slice(type.fullName.length + 1), meta(m)?.overrides]
+          .filter((k): k is string => !!k).map(k => `method|${k}`)),
+      ];
+      if (hiddenOrObsolete.length) redeclared.set(entry, hiddenOrObsolete);
       allTypes.set(`${assemblyName}|${type.fullName}`, entry);
       // A type hidden from IntelliSense (XamSparklineView, SeriesRenderManager) is public only for Infragistics' own
       // controls: no page and no list_wpf_components entry, but still a base its subtypes inherit members from.
@@ -660,8 +682,11 @@ async function generate() {
   console.log(`Members: ${skippedObsolete} [Obsolete] moved to "obsolete", ${skippedHidden} hidden from IntelliSense left out; ` +
     `${methodsSigned}/${methodsKept} methods and constructors have a signature (${uncoveredTypes.length} type(s) the extractor couldn't read` +
     `${uncoveredTypes.length ? `: ${uncoveredTypes.slice(0, 5).join(', ')}` : ''}).`);
-  // Every method of a type the extractor read has a signature, so a low share means the doc IDs it generated stopped
-  // matching the XML's: agents would be back to method names without parameters.
+  console.log(`${unmatchedMethods.length} method(s) / constructor(s) of types the extractor read matched none of its doc IDs` +
+    `${unmatchedMethods.length ? ` (methods kept by name): ${unmatchedMethods.slice(0, 5).join(', ')}` : ''}.`);
+  // Every method of a type the extractor read has a signature or a non-public entry, and the rest count as unsigned,
+  // so a low share means the doc IDs it generated stopped matching the XML's: agents would be back to method names
+  // without parameters.
   assertBuildStep(methodsKept > 0 && methodsSigned / methodsKept >= 0.95,
     `Only ${methodsSigned} of ${methodsKept} methods and constructors got a signature from nuget/type-info.json "__members". ` +
     `The extractor's doc IDs (MethodDocId / ParamId in scripts/type-extractor/Program.cs) no longer match the XML docs' ` +
