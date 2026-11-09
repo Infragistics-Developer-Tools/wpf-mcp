@@ -278,57 +278,100 @@ async function main(): Promise<void> {
       check('an obsolete enum value names its replacement',
         !r.isError && text.includes('_Showing 1 value whose name contains "chloropleth"._') && text.includes('This is a synonym for Choropleth. ⚠ OBSOLETE: Please use Choropleth instead.'),
         text.slice(-400));
-      // Types that share a short name each have a page, opened by full name: "SelectionType" is XamGrid's (None, Single,
-      // Multiple), and an agent on XamDataGrid wrote SelectionType.Multiple, which its SelectionType doesn't have.
+      // Types that share a short name each have a page, opened by full name. The name alone opens the type of the family
+      // Infragistics recommends, never a retired control's: "SelectionType" was XamGrid's (None, Single, Multiple), and an
+      // agent on XamDataGrid wrote SelectionType.Multiple, which its SelectionType doesn't have.
       r = await call('get_wpf_api_reference', { component: 'SelectionType' });
       text = textOf(r);
-      check('a shared name lists the others with the call that opens each',
-        !r.isError && text.includes('**Full type name:** `Infragistics.Controls.Grids.SelectionType`') &&
-        text.includes('- `get_wpf_api_reference("Infragistics.Windows.Controls.SelectionType")` — 7 values (`Default`, `None`, `Single`, `Extended`, '),
+      check('a shared name is not a retired control\'s type, and lists the others with the call that opens each',
+        !r.isError && text.includes('**Full type name:** `Infragistics.Windows.Controls.SelectionType`') && text.includes('- **Extended** = 3:') &&
+        text.includes('- `get_wpf_api_reference("Infragistics.Controls.Grids.SelectionType")` — 3 values (`None`, `Single`, `Multiple`), NuGet `Infragistics.WPF.Controls.Grids.XamGrid.Trial`'),
         text.slice(0, 1200));
-      r = await call('get_wpf_api_reference', { component: 'Infragistics.Windows.Controls.SelectionType' });
+      r = await call('get_wpf_api_reference', { component: 'Infragistics.Controls.Grids.SelectionType' });
       text = textOf(r);
       check('a full name opens a type that lost its short name',
-        !r.isError && text.includes('**Full type name:** `Infragistics.Windows.Controls.SelectionType`') && text.includes('- **Extended** = 3:') &&
-        text.includes('`get_wpf_api_reference("Infragistics.Controls.Grids.SelectionType")` (what "SelectionType" alone returns)'),
+        !r.isError && text.includes('**Full type name:** `Infragistics.Controls.Grids.SelectionType`') && text.includes('- **Multiple** = 2:') &&
+        text.includes('`get_wpf_api_reference("Infragistics.Windows.Controls.SelectionType")` (what "SelectionType" alone returns)'),
         text.slice(0, 1200));
-      r = await call('get_wpf_api_reference', { component: 'infragistics.controls.grids.selectiontype' });
+      r = await call('get_wpf_api_reference', { component: 'infragistics.windows.controls.selectiontype' });
       check('a full name opens the type that kept the name, case-insensitively',
-        !r.isError && textOf(r).includes('**Full type name:** `Infragistics.Controls.Grids.SelectionType`') && textOf(r).includes('- **Multiple** = 2:'), textOf(r).slice(0, 400));
+        !r.isError && textOf(r).includes('**Full type name:** `Infragistics.Windows.Controls.SelectionType`') && textOf(r).includes('- **Extended** = 3:') &&
+        !textOf(r).includes('(what "SelectionType" alone returns)'), textOf(r).slice(0, 400));
       r = await call('get_wpf_api_reference', { component: 'Infragistics.Windows.Editors.SelectionType' });
       check('an unknown full name of a known short name → isError listing the real ones',
         r.isError === true && textOf(r).includes('Type "Infragistics.Windows.Editors.SelectionType" not found') &&
-        textOf(r).includes('- `get_wpf_api_reference("Infragistics.Windows.Controls.SelectionType")` — NuGet'), textOf(r).slice(0, 400));
+        textOf(r).includes('- `get_wpf_api_reference("Infragistics.Controls.Grids.SelectionType")` — NuGet'), textOf(r).slice(0, 400));
+      // Newer copies of legacy Infragistics.Windows types take their name: the ThemeManager of the newer themes (what
+      // setup_wpf_theme applies, ApplicationTheme), the newer XamComboEditor (IsEditable, AllowFiltering, AutoComplete).
+      r = await call('get_wpf_api_reference', { component: 'ThemeManager' });
+      text = textOf(r);
+      check('"ThemeManager" is the newer themes\' ThemeManager',
+        !r.isError && text.includes('**Full type name:** `Infragistics.Themes.ThemeManager`') && text.includes('- **ApplicationTheme** `ThemeBase`:') &&
+        text.includes('- `get_wpf_api_reference("Infragistics.Windows.Themes.ThemeManager")` — 17 members'),
+        text.slice(0, 1200));
+      r = await call('get_wpf_api_reference', { component: 'XamComboEditor', kind: 'properties', member: 'IsEditable' });
+      text = textOf(r);
+      check('"XamComboEditor" is the newer control, the legacy one listed by full name',
+        !r.isError && text.includes('**Full type name:** `Infragistics.Controls.Editors.XamComboEditor`') && text.includes('xmlns:ig="http://schemas.infragistics.com/xaml"') &&
+        text.includes('- **IsEditable** `Boolean`:') && text.includes('- `get_wpf_api_reference("Infragistics.Windows.Editors.XamComboEditor")` — 142 members, NuGet `Infragistics.WPF.Editors.Trial`'),
+        text.slice(0, 1200));
+      // A generic name is a valid code span: double-fenced, as its backtick would end a single-fenced one.
+      r = await call('get_wpf_api_reference', { component: 'SelectedCollectionBase`1', kind: 'events' });
+      check('a generic full name renders as one code span',
+        !r.isError && textOf(r).includes('This page documents `` Infragistics.Controls.Menus.SelectedCollectionBase`1 `` (38 members), which'), textOf(r).slice(0, 1200));
       // A nested type's full name, as reflection writes it (Outer+Inner) or as C# does (Outer.Inner).
       r = await call('get_wpf_api_reference', { component: 'Infragistics.Olap.Xmla.XmlaDataSource+DataSourceState' });
       check('a nested type that lost its short name opens by Outer+Inner',
         !r.isError && textOf(r).includes('**Full type name:** `Infragistics.Olap.Xmla.XmlaDataSource.DataSourceState`') && textOf(r).includes(':XmlaDataSource+DataSourceState` (nested class)'),
         textOf(r).slice(0, 400));
+      // Guard (passes on the code before full names too): a full name whose short name has no page is a plain not-found.
       r = await call('get_wpf_api_reference', { component: 'Infragistics.Controls.Grids.NoSuchTypeXyz' });
       check('an unknown full name → isError', r.isError === true && textOf(r).includes('not found'), textOf(r).slice(0, 200));
-      // A type's page is built like any other: the newer XamComboEditor inherits most of its API from ComboEditorBase<T, TItem>.
-      r = await call('get_wpf_api_reference', { component: 'Infragistics.Controls.Editors.XamComboEditor', kind: 'properties', member: 'DropDown' });
+      // A type's page is built like any other: the legacy XamComboEditor inherits most of its API from ValueEditor.
+      r = await call('get_wpf_api_reference', { component: 'Infragistics.Windows.Editors.XamComboEditor', kind: 'properties', member: 'Value' });
       text = textOf(r);
       check('a type that lost its short name has its inherited members',
-        !r.isError && text.includes('xmlns:ig="http://schemas.infragistics.com/xaml"') && text.includes('(inherited from `ComboEditorBase`2`)') && text.includes('- **IsDropDownOpen** `Boolean`:'),
+        !r.isError && text.includes('xmlns:igEditors="http://infragistics.com/Editors"') && text.includes('### Properties (inherited from `ValueEditor`)') && text.includes('- **Value** `Object`:') &&
+        text.includes('`get_wpf_api_reference("Infragistics.Controls.Editors.XamComboEditor")` (what "XamComboEditor" alone returns)'),
         text.slice(0, 600));
       // Two assemblies have an Infragistics.Controls.Editors.Caret: the assembly picks one.
       r = await call('get_wpf_api_reference', { component: 'Infragistics.Controls.Editors.Caret, Infragistics.WPF.Controls.Editors.XamRichTextEditor' });
       check('a full name two assemblies share opens the one its assembly names',
         !r.isError && textOf(r).includes('**Assembly:** `Infragistics.WPF.Controls.Editors.XamRichTextEditor`'), textOf(r).slice(0, 400));
-      // The same class listed under two packages (the Charts one ships XamSpreadsheet's XML docs) is not another type.
+      // XamSpreadsheet's package is the one with its DLL: Infragistics.WPF.Spreadsheet.Charts.Trial also ships its XML docs
+      // (beside its own ChartAdapter DLL), and an agent installed that one from the scaffold.
       r = await call('get_wpf_api_reference', { component: 'XamSpreadsheet', kind: 'events' });
-      check('the same class under a second package is a note, not an ambiguity',
-        !r.isError && textOf(r).includes('_The same class, from the same assembly, is also listed under NuGet `Infragistics.WPF.Spreadsheet.Trial`._') && !textOf(r).includes('is ambiguous'),
+      check('XamSpreadsheet\'s NuGet package is the one with its DLL',
+        !r.isError && textOf(r).includes('**NuGet:** `Infragistics.WPF.Spreadsheet.Trial`') && !textOf(r).includes('Spreadsheet.Charts') && !textOf(r).includes('is ambiguous'),
         textOf(r).slice(0, 600));
       // Search finds it by its members (agents searched these three looking for the newer XamComboEditor), and says how to open it.
       r = await call('search_wpf_api', { query: 'AutoComplete IsEditable AllowFiltering', limit: 5 });
-      check('search finds a type that lost its short name, with its full name',
+      check('search finds the newer XamComboEditor, with its full name',
         !r.isError && textOf(r).includes('- **Several types are named "XamComboEditor":** open this one with get_wpf_api_reference("Infragistics.Controls.Editors.XamComboEditor")'),
         textOf(r).slice(0, 600));
+      // A query that is a shared name lists its types first among equal scores: the Excel Axis used to rank 42nd.
+      r = await call('search_wpf_api', { query: 'Axis' });
+      check('search for a shared name lists the types of that name first among ties',
+        !r.isError && textOf(r).includes('open this one with get_wpf_api_reference("Infragistics.Controls.Charts.Axis")') &&
+        textOf(r).includes('open this one with get_wpf_api_reference("Infragistics.Documents.Excel.Charts.Axis")'),
+        textOf(r).slice(0, 600));
       r = await call('list_wpf_components', { filter: 'XamComboEditor' });
-      check('list_wpf_components names the other control of the name',
-        !r.isError && textOf(r).includes('- ⚠️ Not the only XamComboEditor: `Infragistics.Controls.Editors.XamComboEditor` is another'), textOf(r).slice(0, 800));
+      check('list_wpf_components lists the newer XamComboEditor and names the legacy one',
+        !r.isError && textOf(r).includes('### XamComboEditor\n- **xmlns:** `xmlns:ig="http://schemas.infragistics.com/xaml"`\n- **NuGet:** `Infragistics.WPF.Controls.Editors.XamComboEditor.Trial`') &&
+        textOf(r).includes('- ⚠️ Not the only XamComboEditor: `Infragistics.Windows.Editors.XamComboEditor` is another'), textOf(r).slice(0, 800));
+      // The scaffold uses the same control, says there is another, and takes the other's full name.
+      r = await call('get_wpf_project_scaffold', { components: ['XamComboEditor', 'XamSpreadsheet'], projectName: 'SmokeApp' });
+      text = textOf(r);
+      check('scaffold: the newer XamComboEditor, the other named; XamSpreadsheet\'s own package',
+        !r.isError && text.includes('dotnet add package Infragistics.WPF.Controls.Editors.XamComboEditor.Trial\n') && text.includes('xmlns:ig="http://schemas.infragistics.com/xaml"') &&
+        text.includes('not the only XamComboEditor: `Infragistics.Windows.Editors.XamComboEditor` is another') &&
+        text.includes('dotnet add package Infragistics.WPF.Spreadsheet.Trial\n') && !text.includes('Spreadsheet.Charts'),
+        text.slice(0, 1200));
+      r = await call('get_wpf_project_scaffold', { components: ['Infragistics.Windows.Editors.XamComboEditor'], projectName: 'SmokeApp' });
+      text = textOf(r);
+      check('scaffold takes the full name of the other control of a name',
+        !r.isError && text.includes('dotnet add package Infragistics.WPF.Editors.Trial\n') && text.includes('xmlns:igEditors="http://infragistics.com/Editors"') && !text.includes('not found'),
+        text.slice(0, 1200));
     }
     r = await call('get_wpf_api_reference', { component: 'xamdatagrid', kind: 'events' });
     check('case-insensitive lookup + kind filter', !r.isError && textOf(r).includes('# XamDataGrid'));
@@ -410,10 +453,38 @@ async function main(): Promise<void> {
       // No WPF topic says "scheduler" (XamScheduler is the Xamarin control): the empty result points to the XamSchedule family.
       r = await call('search_wpf_docs', { query: 'scheduler' });
       check('"scheduler" points to control "xamSchedule"', r.isError === true && textOf(r).includes('search_wpf_docs(control: "xamSchedule")'), textOf(r).slice(0, 300));
+      r = await call('search_wpf_docs', { query: 'TaskScheduler' });
+      check('"TaskScheduler" gets no XamScheduler hint', !textOf(r).includes('XamScheduler'), textOf(r).slice(0, 300));
+      // docs-common's productivity-tools folder also has Xamarin.Forms topics, which only its ifdef::xamarin[] blocks link.
+      r = await call('get_wpf_doc', { topic: 'using-control-configurator-with-xamarin-data-grid' });
+      check('the Xamarin.Forms data grid configurator topic is left out', r.isError === true, textOf(r).slice(0, 200));
       // include:: pastes the included file: this topic was its title, Purpose and Required Background (504 characters).
       r = await call('get_wpf_doc', { topic: 'xamdatagrid-crossfieldrecordfiltering' });
       text = textOf(r);
       check('include:: content is pasted in', !r.isError && text.includes('## Specifying Filters Programmatically') && text.includes('RecordFilterScope'), text.slice(-200));
+      // A file that is its own title and an include:: of a whole topic is that topic under its own title, not under both.
+      r = await call('get_wpf_doc', { topic: 'xamdatapresenter-field-grouping' });
+      check('a whole topic pasted under a title of its own keeps one title',
+        !r.isError && textOf(r).startsWith('## Field Grouping (xamDataPresenter)\n') && !textOf(r).includes('# Field Grouping (xamDataGrid)'), textOf(r).slice(0, 300));
+      // A topic published for two controls (xamdatagrid-X and xamdatapresenter-X paste one include:: file) is listed once,
+      // as the copy for `control`, naming the other: both copies took places and pushed xamdatagrid-exporting-data out.
+      r = await call('search_wpf_docs', { query: 'export DataPresenter control to Excel', control: 'xamDataGrid', limit: 6 });
+      text = textOf(r);
+      check('the same text is listed once, as the copy for `control`',
+        !r.isError && text.includes('**Topic slug:** `xamdatagrid-configuring-custom-tab-navigation`') &&
+        text.includes('**Same text also under:** `xamdatapresenter-configuring-custom-tab-navigation`') &&
+        !text.includes('**Topic slug:** `xamdatapresenter-configuring-custom-tab-navigation`') && text.includes('`xamdatagrid-exporting-data`'),
+        text.slice(0, 300));
+      r = await call('search_wpf_docs', { query: 'record filtering filter record', control: 'xamDataPresenter', limit: 8 });
+      text = textOf(r);
+      check('with control "xamDataPresenter", its own copy is the one listed',
+        !r.isError && text.includes('**Topic slug:** `xamdatapresenter-crossfieldrecordfiltering`') && !text.includes('**Topic slug:** `xamdatagrid-crossfieldrecordfiltering`'),
+        text.slice(0, 300));
+      // The included file itself still opens by its metadata name, but isn't listed as a third copy.
+      r = await call('search_wpf_docs', { control: 'XamCurrencyEditor', limit: 15 });
+      check('an include:: fragment is not listed', !r.isError && !textOf(r).includes('**Topic slug:** `configuring-specific-editor-fields`'), textOf(r).slice(0, 300));
+      r = await call('get_wpf_doc', { topic: 'configuring-specific-editor-fields' });
+      check('the include:: fragment still opens by its slug', !r.isError && textOf(r).includes('CurrencyField'), textOf(r).slice(0, 200));
       // A metadata name several files claim belongs to the file named after it; the rest keep their own file names.
       r = await call('get_wpf_doc', { topic: 'piechart-selection' });
       check('"piechart-selection" is the pie chart selection topic', !r.isError && textOf(r).startsWith('## Selection\n') && textOf(r).includes('selection feature in the XamPieChart'), textOf(r).slice(0, 300));
@@ -421,6 +492,12 @@ async function main(): Promise<void> {
       check('the data pie chart overview, also named "piechart-selection", has its own slug', !r.isError && textOf(r).startsWith('## XamDataPieChart\n'), textOf(r).slice(0, 300));
       r = await call('get_wpf_doc', { topic: 'whats-new-in-2017-volume-1' });
       check('"whats-new-in-2017-volume-1" is volume 1, not volume 2 that also claims the name', !r.isError && textOf(r).startsWith('## What\'s New in 2017 Volume 1\n'), textOf(r).slice(0, 300));
+      // home-page.adoc is wpf-netadvantage-win-client-wpf.adoc byte for byte, metadata name included: not another topic.
+      r = await call('get_wpf_doc', { topic: 'home-page' });
+      check('a copy of the file that keeps a name is left out', r.isError === true, textOf(r).slice(0, 200));
+      // The data pie chart files that claim piechart-selection copied its {PieChartName} too: they get their folder's control.
+      r = await call('get_wpf_doc', { topic: 'data-pie-chart-animation' });
+      check('a docs-common topic that took its file name is tagged with its folder\'s control', !r.isError && textOf(r).includes('**Controls:** XamDataPieChart\n'), textOf(r).slice(0, 300));
       // docs-wpf's bulletgraph.adoc is only its title; the docs site serves docs-common's overview of the same name.
       r = await call('get_wpf_doc', { topic: 'bulletgraph' });
       check('a docs-common topic replaces the docs-wpf stub of the same name', !r.isError && textOf(r).includes('In This Group of Topics'), textOf(r).slice(0, 300));

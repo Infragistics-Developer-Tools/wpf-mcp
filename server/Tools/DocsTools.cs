@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using Infragistics.Wpf.Mcp.Data;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
@@ -8,7 +9,7 @@ using ModelContextProtocol.Server;
 namespace Infragistics.Wpf.Mcp.Tools;
 
 [McpServerToolType]
-public sealed class DocsTools(DataStore store, ToolLog log)
+public sealed partial class DocsTools(DataStore store, ToolLog log)
 {
     // ── search_wpf_docs ──────────────────────────────────────────────────────
 
@@ -57,7 +58,7 @@ public sealed class DocsTools(DataStore store, ToolLog log)
         }
 
         var controlMatchCount = 0;
-        var results = new List<(DocIndexEntry entry, string matchedOn, int score)>();
+        var results = new List<(DocIndexEntry entry, string matchedOn, int score, int controlScore)>();
 
         foreach (var entry in store.DocIndex)
         {
@@ -68,7 +69,7 @@ public sealed class DocsTools(DataStore store, ToolLog log)
 
             if (tokens.Length == 0)
             {
-                results.Add((entry, controlMatchedOn, controlScore));
+                results.Add((entry, controlMatchedOn, controlScore, controlScore));
                 continue;
             }
 
@@ -86,14 +87,42 @@ public sealed class DocsTools(DataStore store, ToolLog log)
             var matchedOn = titleHits > 0 ? "title" : controlHits > 0 ? "control name" : tagHits > 0 ? "tags" : "summary";
             if (controlFilter is not null) matchedOn += $"; {controlMatchedOn}";
             var score = titleHits * 4 + controlHits * 3 + tagHits * 2 + summaryHits + controlScore;
-            results.Add((entry, matchedOn, score));
+            results.Add((entry, matchedOn, score, controlScore));
         }
 
         var ordered = results.OrderByDescending(r => r.score).ToArray();
-        var totalFound = ordered.Length;
-        var limited = ordered.Take(limit).ToArray();
+        // A topic published for several controls (xamdatagrid-X and xamdatapresenter-X, mostly one include:: file under
+        // two titles) is listed once, in its best-ranked copy's place, naming the others: two copies took two places.
+        // The copy shown is the one for `control` (tagged with or titled after it), else the best match for `query`.
+        // Only topics with the same title or the same opening (the summary after the title) are compared by text: the
+        // xamDataCards and xamDataPresenter "Undo Operations" link lists differ in title only.
+        var listed = new List<(DocIndexEntry entry, string matchedOn, int controlScore, string title, string opening, List<DocIndexEntry> copies)>();
+        var textKeys = new Dictionary<string, string>();
+        string TextKey(DocIndexEntry e) => textKeys.TryGetValue(e.Slug, out var key) ? key
+            : textKeys[e.Slug] = store.LoadDoc(e.Slug) is { } doc ? SameTextKey(doc.Body) : e.Slug;
+        var copyCount = 0;
+        foreach (var r in ordered)
+        {
+            var title = SameTitle(r.entry.Title);
+            var opening = Opening(r.entry);
+            var i = listed.FindIndex(l => (l.title == title || opening.Length > 0 && l.opening == opening) && TextKey(l.entry) == TextKey(r.entry));
+            if (i < 0)
+            {
+                if (listed.Count < limit) listed.Add((r.entry, r.matchedOn, r.controlScore, title, opening, []));
+                continue;
+            }
+            copyCount++;
+            var shown = listed[i];
+            if (r.controlScore <= shown.controlScore) shown.copies.Add(r.entry);
+            else
+            {
+                shown.copies.Add(shown.entry);
+                listed[i] = (r.entry, r.matchedOn, r.controlScore, title, opening, shown.copies);
+            }
+        }
+        var totalFound = ordered.Length - copyCount;
 
-        if (limited.Length == 0)
+        if (listed.Count == 0)
         {
             string msg;
             if (controlFilter is not null && controlMatchCount == 0)
@@ -102,27 +131,29 @@ public sealed class DocsTools(DataStore store, ToolLog log)
                 msg = $"{controlMatchCount} topic(s) reference control \"{control}\", but none matched any word in \"{query}\". Try fewer/simpler keywords, or call search_wpf_docs(control: \"{control}\") with no query to browse all {controlMatchCount} topics for this component.";
             else
                 msg = $"No documentation topics found matching any word in \"{query}\". Try shorter or more general keywords (e.g. \"getting started\", \"grouping\", \"pin pane\"), or add `control` to browse a specific component's topics directly.";
-            // XamScheduler is the Xamarin control; no WPF topic uses the word, so a search for it ended here.
-            if ($"{query} {control}".Contains("scheduler", StringComparison.OrdinalIgnoreCase))
+            // XamScheduler is the Xamarin control; no WPF topic uses the word, so a search for it ended here. The whole
+            // word: .NET's TaskScheduler is not a scheduling control.
+            if (SchedulerWord().IsMatch($"{query} {control}"))
                 msg += " WPF has no XamScheduler (a Xamarin control): its scheduling controls are the XamSchedule family (XamScheduleView, XamDayView, XamMonthView, XamOutlookCalendarView), documented under control \"xamSchedule\" — call search_wpf_docs(control: \"xamSchedule\"), with `query` words to narrow.";
             log.Write("search_wpf_docs", input, msg, timer);
             return ToolResult.Error(msg);
         }
 
-        var lines = limited.Select(r => string.Join('\n', new[]
+        var lines = listed.Select(r => string.Join('\n', new[]
         {
             $"### {(string.IsNullOrEmpty(r.entry.Title) ? r.entry.Slug : r.entry.Title)}",
             $"- **Topic slug:** `{r.entry.Slug}`",
             $"- **Matched on:** {r.matchedOn}",
             $"- **Controls:** {(r.entry.ControlNames.Length > 0 ? string.Join(", ", r.entry.ControlNames) : "_(none listed)_")}",
             $"- **Tags:** {(r.entry.Tags.Length > 0 ? string.Join(", ", r.entry.Tags) : "_(none)_")}",
-            $"- {(string.IsNullOrEmpty(r.entry.Summary) ? "_(no summary)_" : r.entry.Summary)}",
-        }));
+        }
+        .Concat(r.copies.Select(c => $"- **Same text also under:** `{c.Slug}`" + (c.ControlNames.Length > 0 ? $" ({string.Join(", ", c.ControlNames)})" : "")))
+        .Append($"- {(string.IsNullOrEmpty(r.entry.Summary) ? "_(no summary)_" : r.entry.Summary)}")));
 
         var queryLabel = !string.IsNullOrEmpty(query) ? $"\"{query}\"" : "(browsing by control)";
         var text = string.Join("\n\n", new[]
             {
-                $"## WPF Documentation Search: {queryLabel} ({limited.Length} of {totalFound} matches)",
+                $"## WPF Documentation Search: {queryLabel} ({listed.Count} of {totalFound} matches)",
                 "",
             }
             .Concat(lines)
@@ -160,9 +191,37 @@ public sealed class DocsTools(DataStore store, ToolLog log)
         return (score, string.Join(", ", how));
     }
 
+    // The title without the controls it names in parentheses: "Cross-Field Record Filtering (xamDataGrid)" and
+    // "… (xamDataPresenter)" are one title.
+    private static string SameTitle(string title) => XamParenthetical().Replace(title, "").Trim().ToLowerInvariant();
+
+    // The summary after the title it starts with: the text's first words, or all of a short one.
+    private static string Opening(DocIndexEntry e) =>
+        (e.Summary.StartsWith(e.Title, StringComparison.Ordinal) ? e.Summary[e.Title.Length..] : e.Summary).Trim();
+
+    // The text below the title, every Xam* name the same word: each copy names its own control ("About xamDataGrid" and
+    // "About xamDataPresenter" in xamdatagrid- and xamdatapresenter-crossfieldrecordfiltering).
+    private static string SameTextKey(string body)
+    {
+        var text = body.StartsWith("# ", StringComparison.Ordinal) ? body[(body.IndexOf('\n') + 1)..] : body;
+        return Whitespace().Replace(XamName().Replace(text, "xam"), " ").Trim();
+    }
+
+    [GeneratedRegex(@"\s*\([^()]*\b[Xx]am[A-Z][^()]*\)")]
+    private static partial Regex XamParenthetical();
+
+    [GeneratedRegex(@"\b[Xx]am[A-Z][A-Za-z0-9]*\b")]
+    private static partial Regex XamName();
+
+    [GeneratedRegex(@"\s+")]
+    private static partial Regex Whitespace();
+
+    [GeneratedRegex(@"\b(?:xam)?scheduler\b", RegexOptions.IgnoreCase)]
+    private static partial Regex SchedulerWord();
+
     // ── get_wpf_doc ──────────────────────────────────────────────────────────
 
-    // Topics up to this size come back whole (2,350 of 2,376 on 26.1.21). The rest come in pages split at their section
+    // Topics up to this size come back whole (2,360 of 2,386 on 26.1.21). The rest come in pages split at their section
     // headings, like large theme files: up to 9 (resources-financialdata, 192K; the next longest is 50K). They used to be
     // cut at 6,000 characters, code samples included.
     private const int MaxDocChars = 24000;

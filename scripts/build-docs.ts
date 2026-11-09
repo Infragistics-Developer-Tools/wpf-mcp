@@ -52,6 +52,15 @@ const COMMON_FOLDERS = new Map<string, string | null>([
   ['surface-chart', 'SurfaceChartName'],
 ]);
 
+// docs-common topics of a WPF folder that are not WPF's, though no buildFlags say so: productivity-tools.adoc and
+// getting-started-with-control-configurators.adoc link them only inside ifdef::xamarin[] blocks, toc/master-wpf.toc
+// doesn't list them, and their text is about Xamarin.Forms (App Map lays out a Xamarin.Forms app, the Toolbox drags
+// Xamarin.Forms controls onto a page; WPF's data grid configurator is using-control-configurator-with-data-grid).
+const COMMON_NOT_WPF = new Set([
+  'productivity-tools/getting-started-with-app-map.adoc', 'productivity-tools/getting-started-with-toolbox.adoc',
+  'productivity-tools/using-control-configurator-with-xamarin-data-grid.adoc',
+]);
+
 // ── DocsConfig variable substitution (WPF product) ────────────────────────────
 //
 // docs-common topics are shared across every Infragistics platform, so they
@@ -216,6 +225,12 @@ export interface DocEntry extends DocIndexEntry {
 // Matches a localized sibling such as "datagrid-column-pinning.ja-JP".
 const LOCALIZED_FILE = /\.[a-z]{2}-[A-Z]{2}$/;
 
+/** The control a docs-common folder covers: the wpf value of its COMMON_FOLDERS variable, if it has one. */
+function folderControlOf(folder: string | undefined): string | null {
+  const variable = folder ? COMMON_FOLDERS.get(folder) : null;
+  return variable ? WPF_VARS.get(variable)! : null;
+}
+
 /** A metadata control name that is only the docs-common folder's name for its control: "financial-chart" or "FinancialChart" for XamFinancialChart. */
 function isFolderAlias(name: string, folder: string, control: string): boolean {
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -370,8 +385,10 @@ const unsupportedIncludes = new Set<string>();
  * Purpose and Required Background, then include::shared-crossfieldrecordfiltering.adoc[] with the whole explanation
  * and its samples. Every include in the sources has empty brackets; an attribute (leveloffset, tag, lines…) would
  * change what is pasted, so one is refused at the end rather than ignored. A missing file or a cycle pastes nothing.
+ * A file with a title of its own that includes a whole topic (xamdatapresenter-field-grouping: its title, then
+ * include::xamdatagrid-field-grouping.adoc[]) is that topic under its own title: the pasted title would be a second H1.
  */
-function expandIncludes(raw: string, filePath: string, stack: string[] = [filePath]): string {
+function expandIncludes(raw: string, filePath: string, stack: string[] = [filePath], titled = /^= \S/m.test(raw)): string {
   return raw.split('\n').map((line, i) => {
     const m = INCLUDE_LINE.exec(line);
     if (!m) return line;
@@ -381,7 +398,8 @@ function expandIncludes(raw: string, filePath: string, stack: string[] = [filePa
     if (stack.includes(target)) { brokenIncludes.set(where, `include::${m[1]}[] is a cycle: that file is being pasted already`); return ''; }
     if (!existsSync(target)) { brokenIncludes.set(where, `include::${m[1]}[]: no such file`); return ''; }
     includedFiles.add(target);
-    return expandIncludes(readSource(target), target, [...stack, target]);
+    const pasted = readSource(target);
+    return expandIncludes(titled ? pasted.replace(/^= \S.*$/m, '') : pasted, target, [...stack, target], titled || /^= \S/m.test(pasted));
   }).join('\n');
 }
 
@@ -424,8 +442,7 @@ function processFile({ path: filePath, source, folder }: FileSource): ProcessedT
   // (data-pie-chart-data-binding's {DataDataPieChartName}, a typo), and the folder's own alias ("financial-chart",
   // "FinancialChart" in 13 financial-chart topics) stands for its control: an alias only half-matches the control
   // filter, so those topics ranked below the ones that name no control.
-  const folderVar     = folder ? COMMON_FOLDERS.get(folder) : null;
-  const folderControl = folderVar ? WPF_VARS.get(folderVar)! : null;
+  const folderControl = folderControlOf(folder);
   const named         = (meta?.controlName ?? []).map(s => s.trim()).filter(s => s && !/\{[A-Za-z0-9_.-]+\}/.test(s))
     .map(s => folderControl && isFolderAlias(s, folder!, folderControl) ? folderControl : s);
   const controlNames  = named.length || !folderControl ? [...new Set(named)] : [folderControl];
@@ -480,6 +497,9 @@ function collectAdoc(dir: string): string[] {
 /** `folder`: the docs-common folder (COMMON_FOLDERS key) the file is in. */
 interface FileSource { path: string; source: 'wpf' | 'common'; folder?: string }
 
+/** The COMMON_NOT_WPF files found, left out. */
+const notWpf: string[] = [];
+
 function discoverFiles(): FileSource[] {
   const files: FileSource[] = [];
 
@@ -501,7 +521,8 @@ function discoverFiles(): FileSource[] {
       const folderPath = join(DOCS_COMMON_DIR, folder);
       if (!statSync(folderPath).isDirectory()) continue;
       for (const f of collectAdoc(folderPath)) {
-        files.push({ path: f, source: 'common', folder });
+        const rel = relative(DOCS_COMMON_DIR, f).replace(/\\/g, '/');
+        if (COMMON_NOT_WPF.has(rel)) notWpf.push(rel); else files.push({ path: f, source: 'common', folder });
       }
     }
   } else {
@@ -564,13 +585,23 @@ skipped += shadowed.length;
 const claims = new Map<string, typeof topics>();
 for (const t of topics) claims.set(t.entry.slug.toLowerCase(), [...(claims.get(t.entry.slug.toLowerCase()) ?? []), t]);
 const renamed: string[] = [];
+const sameAsNamed: typeof topics = [];
 for (const [name, group] of claims) {
   if (group.length < 2) continue;
+  const named = group.find(t => fileName(t).toLowerCase() === name);
   for (const t of group.filter(t => fileName(t).toLowerCase() !== name)) {
+    // home-page.adoc is wpf-netadvantage-win-client-wpf.adoc byte for byte: the same topic again, not another one.
+    if (named && t.entry.title === named.entry.title && t.entry.body === named.entry.body) { sameAsNamed.push(t); continue; }
     renamed.push(`${t.entry.slug} → ${fileName(t)} (${where(t)})`);
     t.entry.slug = fileName(t);
+    // Its metadata is a copy of the other file's, controlName included: the seven data-pie-chart files that claim
+    // piechart-selection and piechart-others-category name {PieChartName}, but are about XamDataPieChart, their folder's.
+    const control = folderControlOf(t.file.folder);
+    if (control) t.entry.controlNames = [control];
   }
 }
+topics = topics.filter(t => !sameAsNamed.includes(t));
+skipped += sameAsNamed.length;
 
 // Two topics left with one slug (two docs-common folders with a file of that name, or a file name that is another
 // topic's metadata name) would overwrite each other's .json file; slugs differing only in letter case collide on a
@@ -583,6 +614,11 @@ assertBuildStep(collisions.length === 0,
   `A file named after a metadata name keeps it and the others take their own file names, so these need a new rule.`
 );
 
+// A file that other topics include and that has a metadata name but no title (configuring-template-field,
+// shared-asynchronouspagingdatasource, the "xamdiagram … summary chart" tables) is not a page of its own: its text is
+// in the topics that include it, and it was a third copy of xamdatagrid-X and xamdatapresenter-X in searches. It is
+// still written, so get_wpf_doc opens its slug as before, but its index entry has nothing for search_wpf_docs to match.
+let unsearchable = 0;
 for (const { entry, file } of topics) {
   const { body, xamlSnippets, ...indexEntry } = entry;
 
@@ -592,7 +628,9 @@ for (const { entry, file } of topics) {
     JSON.stringify(entry, null, 2),
   );
 
-  index.push(indexEntry);
+  const fragment = !entry.title && includedFiles.has(file.path);
+  if (fragment) unsearchable++;
+  index.push(fragment ? { slug: entry.slug, title: '', controlNames: [], tags: [], source: entry.source, summary: '' } : indexEntry);
   if (file.folder) folderCounts.get(file.folder)!.topics++;
 }
 
@@ -647,6 +685,12 @@ assertBuildStep(thinFolders.length === 0,
   `docs-common folders with too few topics written: ${thinFolders.map(c => `${c.f} (${c.topics} of ${c.files} files)`).join(', ')}. ` +
   `Either the folder is gone from docs/docs-common/topics/en (update COMMON_FOLDERS) or processFile drops its topics.`
 );
+// A COMMON_NOT_WPF file renamed or moved upstream would be a WPF topic again, unseen.
+const notWpfMissing = [...COMMON_NOT_WPF].filter(f => !notWpf.includes(f));
+assertBuildStep(!existsSync(DOCS_COMMON_DIR) || notWpfMissing.length === 0,
+  `COMMON_NOT_WPF names files docs/docs-common/topics/en no longer has: ${notWpfMissing.join(', ')}. Find where they went ` +
+  `and update the list, or the Xamarin.Forms topics are back in search_wpf_docs.`
+);
 
 // A pick:[…] left in a written topic means resolvePicks' pattern no longer matches the sources' form.
 const unresolvedPicks = index.filter(e => readFileSync(join(OUT_DIR, `${e.slug}.json`), 'utf-8').includes('pick:[')).map(e => e.slug);
@@ -666,14 +710,17 @@ console.log(`\nDone.`);
 console.log(`  Topics written : ${index.length}`);
 console.log(`  Code blocks    : ${fenced}`);
 console.log(`  Other platforms: ${otherPlatformTopics} topics built only for them left out; ${topicsTrimmed} topics lost ` +
-  `${droppedChars} chars of non-WPF ifdef:: blocks (WPF flags: ${[...WPF_FLAGS].join(', ')})`);
+  `${droppedChars} chars of non-WPF ifdef:: blocks (WPF flags: ${[...WPF_FLAGS].join(', ')}); ${notWpf.length} docs-common ` +
+  `files that aren't WPF's left out (${notWpf.join(', ')})`);
 console.log(`  Includes       : ${includedFiles.size} files pasted by include::, ${fragments.length} of them fragments that ` +
-  `aren't topics; ${aliases.length} files that only include another topic left out (${aliases.map(fileName).join(', ')})`);
-console.log(`  Shared names   : ${renamed.length} topics took their file name as slug, the name being another file's:`);
+  `aren't topics and ${unsearchable} fragments with a metadata name written but not searchable; ${aliases.length} files ` +
+  `that only include another topic left out (${aliases.map(fileName).join(', ')})`);
+console.log(`  Shared names   : ${renamed.length} topics took their file name as slug, the name being another file's, and ` +
+  `${sameAsNamed.length} left out as that file's copy (${sameAsNamed.map(where).join(', ')}):`);
 for (const r of renamed) console.log(`                   ${r}`);
 console.log(`  Same file      : ${shadowed.length} docs-wpf files left out for the docs-common file of the same name: ` +
   shadowed.map(t => `${where(t)} (${t.entry.slug})`).join(', '));
 console.log(`  Skipped        : ${skipped}  (other platforms, ${untitled.length} untitled without a metadata name, ` +
-  `include-only files, docs-wpf files a docs-common one replaces, empty)`);
+  `include-only files, docs-wpf files a docs-common one replaces, copies of a named file, empty)`);
 console.log(`  Index          : ${INDEX_FILE}`);
 console.log(`  Full content   : ${OUT_DIR}/  (${index.length} files)`);

@@ -13,7 +13,7 @@ public sealed record ComponentEntry(
     string NugetPackage,
     string Assembly,
     string Description,
-    AlternateType[]? Alternates = null);   // other types of this name (the newer XamComboEditor), opened by full name
+    AlternateType[]? Alternates = null);   // other types of this name (the legacy XamComboEditor), opened by full name
 
 public sealed record ApiMemberEntry(
     string Name,

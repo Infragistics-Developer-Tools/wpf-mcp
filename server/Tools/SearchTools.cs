@@ -72,7 +72,12 @@ public sealed partial class SearchTools(DataStore store, ToolLog log)
             results.Add((entry.TypeName, entry.Summary, entry.NugetPackage, entry.Lookup, matchedOn, score));
         }
 
-        var ordered = results.OrderByDescending(r => r.score).ToArray();
+        // Ties: the types of a shared name that the query spells exactly ("Axis": the chart's, Excel's) come first. They
+        // came after the others of their score, the ones that lost the name last of all, and the limit cut them off.
+        // OrderBy is stable, so every other result keeps its order.
+        var ordered = results.OrderByDescending(r => r.score)
+            .ThenByDescending(r => r.lookup is not null && string.Equals(r.typeName, query.Trim(), StringComparison.OrdinalIgnoreCase))
+            .ToArray();
         var totalFound = ordered.Length;
         var limited = ordered.Take(limit).ToArray();
 

@@ -50,7 +50,8 @@ public sealed class DataStore
         // A short name, looked up exactly as before (no type's short name has a dot or a "+").
         if (!name.Contains('.') && !name.Contains('+')) return LoadApiDoc(name);
 
-        // "Ns.Type, Assembly" — and a whole assembly-qualified name: ", Version=…" and the rest are ignored.
+        // "Ns.Type, Assembly"; anything after the assembly (", Version=…") is ignored, though a whole assembly-qualified
+        // name rarely fits the 128 characters get_wpf_api_reference takes.
         var parts = name.Split(',');
         var fullName = parts[0].Trim().Replace('+', '.');
         var assembly = parts.Length > 1 ? parts[1].Trim() : null;

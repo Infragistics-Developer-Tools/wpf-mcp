@@ -79,7 +79,7 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
                 $"- **Assembly:** `{c.Assembly}`",
                 $"- {c.Description}",
             };
-            // Another control of this name (the newer Infragistics.Controls.Editors.XamComboEditor), which only its full name opens.
+            // Another control of this name (the legacy Infragistics.Windows.Editors.XamComboEditor), which only its full name opens.
             line.AddRange((c.Alternates ?? []).Select(a =>
                 $"- ⚠️ Not the only {c.Component}: `{a.FullName}` is another (NuGet `{a.NugetPackage}`, `xmlns:{a.DefaultPrefix}=\"{a.XamlNamespace}\"`; " +
                 $"get_wpf_api_reference(\"{a.Lookup}\")). The name alone means the one above in get_wpf_api_reference and get_wpf_project_scaffold."));
@@ -100,6 +100,11 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
     // A Markdown code span, double-fenced when the text has a backtick of its own (a generic type's "EnumWrapper`1"),
     // which would otherwise end the span and cut a call in two.
     private static string Code(string text) => text.Contains('`') ? $"`` {text} ``" : $"`{text}`";
+
+    // Which type of a shared name the name alone opens (familyRank in scripts/build-api.ts).
+    private const string DefaultTypeRule =
+        "the type of the control family Infragistics recommends (never a retired control's, such as XamGrid's or the xamInputs'; " +
+        "a newer Infragistics.Controls / Infragistics.Themes copy before the legacy Infragistics.Windows one), else the most fully documented one";
 
     // One line per other type of the page's short name: the call that opens it, then what tells them apart.
     private static string FormatAlternate(AlternateType a, string shortName)
@@ -246,8 +251,9 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             Any public Infragistics WPF type name — 5,100+ types including controls (e.g. "XamDataGrid"),
                   supporting types (e.g. "FieldLayout", "SummaryDefinition"), enums, strategies, indicators, and more.
                   Case-insensitive. To find a Xam* control name use list_wpf_components. To discover any other type name use search_wpf_api.
-                  Or a full name (Namespace.Type), e.g. "Infragistics.Controls.Editors.XamComboEditor": a name several types share
-                  returns the most fully documented one and lists the others with the full name that opens each.
+                  Or a full name (Namespace.Type), e.g. "Infragistics.Windows.Editors.XamComboEditor": a name several types share
+                  returns the one of the control family Infragistics recommends (never a retired control's; a newer copy before
+                  a legacy Infragistics.Windows one; else the most fully documented) and lists the others with the full name that opens each.
             """)]
         [MinLength(1), MaxLength(128)]
         string component,
@@ -334,15 +340,15 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             // Member counts say nothing about enums, which have values instead (every one would read "0 members").
             var count = doc.Values is { } enumValues ? $"{enumValues.Length} values" : $"{memberCount} members";
             var which = doc.Lookup is null
-                ? $"This page documents `{doc.DotnetNamespace}.{doc.Component}` ({count}), the most fully documented one, which \"{doc.Component}\" alone returns."
-                : $"This page documents {Code(doc.Lookup)} ({count}); \"{doc.Component}\" alone returns the most fully documented one.";
+                ? $"This page documents {Code($"{doc.DotnetNamespace}.{doc.Component}")} ({count}), which \"{doc.Component}\" alone returns: {DefaultTypeRule}."
+                : $"This page documents {Code(doc.Lookup)} ({count}); \"{doc.Component}\" alone returns the one marked below: {DefaultTypeRule}.";
             output.Add("");
             output.Add($"⚠️ **\"{doc.Component}\" is ambiguous** — {others.Length} other Infragistics type(s) share this name, each in a different namespace/package with its own xmlns. {which} To open another, pass its full name exactly as given:");
             output.AddRange(others.Select(a => FormatAlternate(a, doc.Component)));
             output.Add($"If the {(doc.Values is null ? "members" : "values")} below don't match the control you're using, you're likely on another type — confirm which package/xmlns your project references before writing XAML.");
         }
-        // The same class listed under a second package (Infragistics.WPF.Spreadsheet.Charts.Trial ships the XML docs of
-        // XamSpreadsheet's assembly): not another type, so no page of its own.
+        // The same class listed under a second package (its DLL shipped in two; none with the 26.1 packages): not another
+        // type, so no page of its own.
         if ((doc.Alternates ?? []).Where(a => a.SameType == true).Select(a => $"`{a.NugetPackage}`").ToArray() is { Length: > 0 } packages)
         {
             output.Add("");
@@ -472,6 +478,8 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             List of Infragistics WPF component names to include in the project.
                   Call list_wpf_components first to resolve exact names.
                   Examples: ["XamDataGrid", "XamCategoryChart"], ["XamDockManager"].
+                  A name two controls share means the one list_wpf_components lists; for the other pass the full name it gives
+                  (e.g. "Infragistics.Windows.Editors.XamComboEditor").
             """)]
         [MinLength(1)]
         string[] components,
@@ -496,14 +504,27 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             return ToolResult.Error(msg);
         }
 
-        var resolved = new List<(string component, string nugetPackage, string xmlns)>();
+        var resolved = new List<(string component, string nugetPackage, string xmlns, string? note)>();
         var notFoundWarnings = new List<string>();
 
         foreach (var name in components)
         {
             var nameLower = name.ToLowerInvariant();
-            var entry = store.Components.FirstOrDefault(c => c.Component.ToLowerInvariant() == nameLower);
-            if (entry is null)
+            var entry = store.Components.FirstOrDefault(c => c.Component.ToLowerInvariant() == nameLower)
+                // A full name, as list_wpf_components gives it for a name two controls share: the one the name means…
+                ?? store.Components.FirstOrDefault(c => string.Equals($"{c.DotnetNamespace}.{c.Component}", name, StringComparison.OrdinalIgnoreCase));
+            // …or the other (the legacy Infragistics.Windows.Editors.XamComboEditor).
+            var other = entry is null && name.Contains('.')
+                ? store.Components.SelectMany(c => (c.Alternates ?? []).Select(a => (owner: c, a)))
+                    .FirstOrDefault(o => o.a.Lookup is not null &&
+                        (string.Equals(o.a.FullName, name, StringComparison.OrdinalIgnoreCase) || string.Equals(o.a.Lookup, name, StringComparison.OrdinalIgnoreCase)))
+                : default;
+            if (other.a is { } alt)
+            {
+                resolved.Add((alt.FullName, alt.NugetPackage, $"xmlns:{alt.DefaultPrefix}=\"{alt.XamlNamespace}\"",
+                    $"not the {other.owner.Component} the name alone means (`{other.owner.DotnetNamespace}.{other.owner.Component}`, NuGet `{other.owner.NugetPackage}`)"));
+            }
+            else if (entry is null)
             {
                 var suggestions = store.Components
                     .Where(c => c.Component.ToLowerInvariant().Contains(nameLower, StringComparison.Ordinal))
@@ -517,7 +538,12 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             }
             else
             {
-                resolved.Add((entry.Component, entry.NugetPackage, $"xmlns:{entry.DefaultPrefix}=\"{entry.XamlNamespace}\""));
+                // A name another control shares names it, with the full name that scaffolds it instead.
+                var note = entry.Alternates is { Length: > 0 } alternates
+                    ? $"`{entry.DotnetNamespace}.{entry.Component}`; not the only {entry.Component}: " + string.Join("; ", alternates.Select(a =>
+                        $"`{a.FullName}` is another (NuGet `{a.NugetPackage}`, `xmlns:{a.DefaultPrefix}=\"{a.XamlNamespace}\"`) — pass \"{a.Lookup}\" in components for that one"))
+                    : null;
+                resolved.Add((entry.Component, entry.NugetPackage, $"xmlns:{entry.DefaultPrefix}=\"{entry.XamlNamespace}\"", note));
             }
         }
 
@@ -565,7 +591,7 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
 
         lines.Add("");
         lines.Add("### Components resolved");
-        lines.AddRange(resolved.Select(r => $"- **{r.component}** → `{r.nugetPackage}`"));
+        lines.AddRange(resolved.Select(r => $"- **{r.component}** → `{r.nugetPackage}`{(r.note is null ? "" : $" ⚠️ {r.note}")}"));
 
         var text = string.Join('\n', lines);
         log.Write("get_wpf_project_scaffold", input, text, timer);

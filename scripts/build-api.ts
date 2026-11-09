@@ -36,11 +36,36 @@ const EXCLUDE_CONTAINS = ['Internal', '<>', 'AnonymousType'];
 // become customer-facing later, so this is a plain omission, not a "deprecated" label.
 const EXCLUDE_PACKAGES = ['infragistics.wpf.controls.grids.xamxgrid.trial']; // compared lowercase
 
+// Controls whose docs topics open with a retirement banner (variables in docs-common/DocsConfig.xml): XamGrid "has been
+// retired … we recommend migrating to [XamDataGrid]" (XamGridHeader, 128 topics); the xamInputs "being planned for
+// retirement … we recommend that you use the xamEditor controls instead" (XamInputHeader, XamMaskedInputHeader,
+// XamNumericInputHeader, XamCurrencyInputHeader, XamDateTimeInputHeader). Their types never take a short name another
+// type has: "SelectionType" is XamDataGrid's, "DaySection" XamMaskedEditor's.
+const RETIRED_ASSEMBLIES = new Set([
+  'Infragistics.WPF.Controls.Grids.XamGrid',
+  'Infragistics.WPF.Controls.Editors.XamMaskedInput',      // XamMaskedInput, XamNumericInput, XamCurrencyInput
+  'Infragistics.WPF.Controls.Editors.XamDateTimeInput',
+]);
+
 function shouldExclude(typeName: string): boolean {
   return (
     EXCLUDE_SUFFIXES.some(s => typeName.endsWith(s)) ||
     EXCLUDE_CONTAINS.some(s => typeName.includes(s))
   );
+}
+
+// Which of the types of a shared short name takes it: the higher rank wins, then the more documented one. A retired
+// control's type ranks lowest; a legacy Infragistics.Windows.<Area> type below a newer copy of it, the same name in
+// Infragistics.Controls.<Area> or Infragistics.<Area> (Editors: the newer XamComboEditor, XamCalendar's parts over
+// XamMonthCalendar's; Themes: the ThemeManager of the newer themes). Areas must match: XamPivotGrid's FieldChooser
+// (Infragistics.Controls.Grids) is not a newer XamDataGrid one (Infragistics.Windows.DataPresenter).
+const nsArea = (ns: string) => ns.replace(/^Infragistics\.(?:Windows\.|Controls\.)?/, '').split('.')[0];
+const isLegacy = (ns: string) => ns.startsWith('Infragistics.Windows.');
+function familyRank(e: ApiEntry, group: ApiEntry[]): number {
+  if (RETIRED_ASSEMBLIES.has(e.assembly)) return 0;
+  const newerCopy = isLegacy(e.dotnetNamespace) && group.some(o =>
+    !isLegacy(o.dotnetNamespace) && !RETIRED_ASSEMBLIES.has(o.assembly) && nsArea(o.dotnetNamespace) === nsArea(e.dotnetNamespace));
+  return newerCopy ? 1 : 2;
 }
 
 /**
@@ -168,6 +193,9 @@ function discoverXmlFiles(): XmlSource[] {
 
       for (const f of readdirSync(libDir)) {
         if (!f.endsWith('.xml')) continue;
+        // Only the docs of a DLL the package ships: Infragistics.WPF.Spreadsheet.Charts.Trial also carries XamSpreadsheet's
+        // XML (without its DLL) beside its own ChartAdapter DLL, which made it the NuGet package of XamSpreadsheet's types.
+        if (!existsSync(join(libDir, `${f.slice(0, -'.xml'.length)}.dll`))) continue;
         const xmlPath = join(libDir, f);
         if (!seen.has(xmlPath)) {
           seen.add(xmlPath);
@@ -508,7 +536,10 @@ async function generate() {
   // same path concurrently and interleave into invalid JSON. loadApiDoc() also resolves
   // names case-insensitively, so a case-variant twin is unreachable regardless.
   const keyByLower = new Map<string, string>();
-  const contestCounts = new Map<string, number>();
+  // Every type of each lowercased short name, in discovery order; the contest is decided once all are known, since
+  // a type's rank depends on the others (familyRank).
+  const candidates = new Map<string, { entry: ApiEntry; count: number; seq: number }[]>();
+  let seq = 0;
   // The types that lost a short-name contest, by lowercased name: each gets a page of its own under api/alternates/.
   const losers = new Map<string, ApiEntry[]>();
 
@@ -701,38 +732,47 @@ async function generate() {
       const typeFlags = memberMeta[`${assemblyName}|T:${type.fullName}`];
       if (typeFlags?.hidden && typeFlags.obsolete === undefined) { hiddenTypes.push(type.fullName); continue; }
 
-      // Short-name contests are still decided by the count from before internal / private (and obsolete / hidden)
-      // members were left out: with the new count, Cell, FieldChooser and RecordFilterCollection switched from the
-      // DataPresenter types to the XamGrid / XamPivotGrid / DataManager ones.
+      // Short-name contests between types of one rank are still decided by the count from before internal / private (and
+      // obsolete / hidden) members were left out: with the new count, FieldChooser and RecordFilterCollection switched
+      // from the DataPresenter types to the XamPivotGrid / DataManager ones.
       const documented = (ms: RawMember[]) => ms.filter(m => m.summary.toLowerCase() !== 'internal').length;
       const contestCount = documented(bucket.props) + fields.length + documented(bucket.events) + documented(bucket.methods);
       const lower = typeName.toLowerCase();
-      const incumbentKey = keyByLower.get(lower);
-
-      if (incumbentKey === undefined) {
-        entries.set(typeName, entry);
-        keyByLower.set(lower, typeName);
-        contestCounts.set(lower, contestCount);
-      } else {
-        // Two different types share this short name. Discovery order is just
-        // package-alphabetical, which surfaces stub types over the real control
-        // (e.g. a 20-member XamComboEditor beating the 125-member one), so keep
-        // whichever documents more members and page the other as an alternate.
-        const incumbent = entries.get(incumbentKey)!;
-        if (!losers.has(lower)) losers.set(lower, []);
-
-        if (contestCount > contestCounts.get(lower)!) {
-          losers.get(lower)!.push(incumbent);
-          entries.delete(incumbentKey);
-          entries.set(typeName, entry);
-          keyByLower.set(lower, typeName);
-          contestCounts.set(lower, contestCount);
-        } else {
-          losers.get(lower)!.push(entry);
-        }
-      }
+      if (!candidates.has(lower)) candidates.set(lower, []);
+      candidates.get(lower)!.push({ entry, count: contestCount, seq: seq++ });
     }    console.log(`${Date.now() - t0}ms  (${members.length} members)`);
   }
+
+  // Short-name contests, replayed in discovery order: a type takes the name from the one holding it if it ranks higher
+  // (familyRank), or as high and documents more members. Discovery order is just package-alphabetical, which surfaces
+  // stub types over the real control (e.g. a 20-member XamComboEditor beating the 125-member one), hence the count.
+  // Winners keep the place they would have taken in a single pass (where each was found), so do the losers' groups.
+  const resolved: { lower: string; winner: { entry: ApiEntry; seq: number }; lost: ApiEntry[]; clash: number }[] = [];
+  const byFamily: string[] = [];
+  for (const [lower, cands] of candidates) {
+    const group = cands.map(c => c.entry);
+    const contest = (rank: (e: ApiEntry) => number) => {
+      let incumbent = cands[0];
+      const lost: ApiEntry[] = [];
+      for (const c of cands.slice(1)) {
+        const r = rank(c.entry), ri = rank(incumbent.entry);
+        if (r > ri || (r === ri && c.count > incumbent.count)) { lost.push(incumbent.entry); incumbent = c; }
+        else lost.push(c.entry);
+      }
+      return { incumbent, lost };
+    };
+    const { incumbent, lost } = contest(e => familyRank(e, group));
+    if (cands.length > 1 && contest(() => 0).incumbent !== incumbent) byFamily.push(incumbent.entry.component);
+    resolved.push({ lower, winner: incumbent, lost, clash: cands[1]?.seq ?? Infinity });
+  }
+  for (const { lower, winner } of [...resolved].sort((a, b) => a.winner.seq - b.winner.seq)) {
+    entries.set(winner.entry.component, winner.entry);
+    keyByLower.set(lower, winner.entry.component);
+  }
+  for (const { lower, lost } of resolved.filter(r => r.lost.length).sort((a, b) => a.clash - b.clash)) losers.set(lower, lost);
+  console.log(`Shared short names: ${losers.size}; ${byFamily.length} go to a type other than the most documented one, ` +
+    `of the family Infragistics recommends (retired XamGrid / xamInputs ranked last, newer copies of legacy ` +
+    `Infragistics.Windows types first): ${byFamily.slice(0, 8).join(', ')}…`);
 
   console.log(`Left out ${skippedNonPublic} non-public (internal / private nested) type(s) documented in the XML, and ` +
     `${skippedNonPublicMembers} member(s) of public types that are internal / private or explicit interface implementations.`);
@@ -760,8 +800,8 @@ async function generate() {
 
   // A type that lost its short name gets a page of its own, built the same way (inherited members included), which
   // get_wpf_api_reference opens by full name; each type of a shared name lists the others with that lookup. Except the
-  // same class listed twice (same assembly and full name: Infragistics.WPF.Spreadsheet.Charts.Trial ships the XML docs
-  // of XamSpreadsheet's assembly beside its own ChartAdapter DLL), which its page only notes.
+  // same class listed twice (same assembly and full name, its DLL in two packages; none since discoverXmlFiles() skips
+  // XML docs without their DLL), which its page only notes.
   const fullName = (e: ApiEntry) => `${e.dotnetNamespace}.${e.component}`;
   const groups: { types: ApiEntry[]; twins: Map<ApiEntry, ApiEntry[]> }[] = [];
   const alternatePages = new Map<string, ApiEntry>();   // by "Assembly|Namespace.Type"
@@ -850,7 +890,7 @@ async function generate() {
 
   // Built from the resolved winners, not during discovery, so a type that loses a
   // short-name collision can't leave a stale registry entry behind. It names the
-  // others, though (the newer Infragistics.Controls.Editors.XamComboEditor).
+  // others, though (the legacy Infragistics.Windows.Editors.XamComboEditor).
   const registry: RegistryEntry[] = [...entries.values()]
     .filter(e => e.component.startsWith('Xam'))
     .map(e => ({
