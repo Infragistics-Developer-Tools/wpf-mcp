@@ -10,17 +10,19 @@
  * Output format (flat object):
  *   "__baseTypes"               : { "Assembly|Namespace.Type" : "BaseAssembly|BaseNamespace.BaseType" }
  *                                 (only for Infragistics bases; a generic base as its definition, "…ResourceSet`1")
- *   "Assembly|Namespace.Type.PropName"  : { typeName, isNullable, isEnum, enumValues? }    (instance and static)
+ *   "Assembly|Namespace.Type.PropName"  : { typeName, isNullable, isEnum, enumValues? }    (public and protected, instance and static)
  *   "Assembly|Namespace.Type.FieldName" : { typeName, isNullable, isEnum, isField: true }  (static ResourceKey/RoutedCommand fields)
  *   "__xaml"                    : { "Assembly|Namespace.Type" (nested: "…|Namespace.Outer.Inner") : { xmlns, prefix, ns, xamlName? } }
  *   "__nonPublicTypes"          : [ "Assembly|Namespace.Type", … ]   (internal / private nested types, to leave out)
  *   "__nonPublicMembers"        : [ "Assembly|Namespace.Type.Member", … ]   (internal / private members, to leave out)
- *   "__members"                 : { "Assembly|<XML doc ID>" : { sig?, params?, overrides?, obsolete?, hidden? } }
+ *   "__members"                 : { "Assembly|<XML doc ID>" : { sig?, params?, overrides?, obsolete?, hidden?, protected? } }
  *                                 (every public / protected method and constructor, with its C# signature and parameter
- *                                 names; properties, events, fields and the type itself only when they are indexers or
- *                                 marked obsolete / hidden)
+ *                                 names; properties, events, fields and the type itself only when they are indexers,
+ *                                 protected (properties and events) or marked obsolete / hidden)
  *   "__nonPublicMethods"        : [ "Assembly|<XML doc ID>", … ]   (internal / private methods and constructors)
  *   "__memberTypes"             : [ "Assembly|Namespace.Type", … ]   (types whose members "__members" covers)
+ *   "__enums"                   : { "Assembly|Namespace.Type" : { flags?, values: [ { name, value }, … ] } }
+ *                                 (every public enum, nested ones too, its values in declaration order)
  */
 
 using System;
@@ -140,6 +142,7 @@ var nonPublicMembers = new SortedSet<string>(StringComparer.Ordinal);
 var members = new SortedDictionary<string, Dictionary<string, object>>(StringComparer.Ordinal);
 var nonPublicMethods = new SortedSet<string>(StringComparer.Ordinal);
 var memberTypes = new SortedSet<string>(StringComparer.Ordinal);
+var enums = new SortedDictionary<string, Dictionary<string, object>>(StringComparer.Ordinal);
 
 foreach (var asm in loaded) {
     foreach (var t in SafeGetTypes(asm)) {
@@ -178,16 +181,19 @@ foreach (var asm in loaded) {
         // also tells overloads apart. Reflection adds what the ID can't: return type, parameter names, out vs ref,
         // defaults. Every public / protected method and constructor gets an entry, and every internal / private one is
         // listed in "__nonPublicMethods", so build-api can tell an unusable overload from one whose ID didn't match;
-        // properties, events and fields only when they are indexers or marked [Obsolete] / hidden from IntelliSense.
+        // properties, events and fields only when they are indexers, protected or marked [Obsolete] / hidden from
+        // IntelliSense. Methods say "protected" in their signature; a property or event gets the flag instead, because
+        // the XML docs list protected ones with the public (XamGrid.CurrentEditCell, a CS0122 from outside the grid).
         // A type that throws here stays out of "__memberTypes", and build-api keeps its members as before.
         try {
             const BindingFlags declared = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance |
                                           BindingFlags.Static | BindingFlags.DeclaredOnly;
             var asmName = asm.GetName().Name;
             var typeId = DocTypeId(t);
-            void Add(string docId, MemberInfo m, string? sig) {
+            void Add(string docId, MemberInfo m, string? sig, bool isProtected = false) {
                 try {
                     var entry = MemberEntry(m, sig);
+                    if (isProtected) entry["protected"] = true;
                     if (entry.Count > 0) members[$"{asmName}|{docId}"] = entry;
                 } catch { /* unreadable attributes or signature: the member stays name-only */ }
             }
@@ -222,14 +228,34 @@ foreach (var asm in loaded) {
                 if (!(IsUsable(p.GetMethod) || IsUsable(p.SetMethod)) || p.Name.Contains('.')) continue;
                 var index = p.GetIndexParameters();
                 var id = $"P:{typeId}.{p.Name}" + (index.Length > 0 ? $"({string.Join(",", index.Select(x => ParamId(x.ParameterType)))})" : "");
-                Add(id, p, index.Length > 0 ? IndexerSignature(p, index) : null);
+                // Protected when no accessor is public: a public getter with a protected setter is still readable.
+                Add(id, p, index.Length > 0 ? IndexerSignature(p, index) : null,
+                    isProtected: !(p.GetMethod?.IsPublic == true || p.SetMethod?.IsPublic == true));
             }
-            foreach (var e in t.GetEvents(declared)) if (IsUsable(e.AddMethod) && !e.Name.Contains('.')) Add($"E:{typeId}.{e.Name}", e, null);
+            foreach (var e in t.GetEvents(declared))
+                if (IsUsable(e.AddMethod) && !e.Name.Contains('.')) Add($"E:{typeId}.{e.Name}", e, null, isProtected: !e.AddMethod!.IsPublic);
             foreach (var f in t.GetFields(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly))
                 Add($"F:{typeId}.{f.Name}", f, null);
             Add($"T:{typeId}", t, null);   // the type itself, when it is [Obsolete] (UnboundField) or hidden
             memberTypes.Add(typeKey);
         } catch { /* skip inaccessible type: build-api keeps its members name-only */ }
+
+        // ── Enum values, in declaration order ────────────────────────────────
+        // The XML docs give each value's summary ("F:Namespace.Enum.Value") but not the order, the numbers or [Flags],
+        // which tells an agent that values combine. Nested enums too: they get pages like other nested types.
+        // Their [Obsolete] / hidden flags are the "F:" entries in "__members" above.
+        if (t.IsEnum) {
+            try {
+                var values = t.GetFields(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly)
+                    .Where(f => f.IsLiteral).OrderBy(f => f.MetadataToken)
+                    .Select(f => new Dictionary<string, object> { ["name"] = f.Name, ["value"] = f.GetRawConstantValue()! })
+                    .ToArray();
+                var info = new Dictionary<string, object>();
+                if (t.IsDefined(typeof(FlagsAttribute), false)) info["flags"] = true;
+                info["values"] = values;
+                enums[typeKey] = info;
+            } catch { /* unreadable enum: its page lists no values */ }
+        }
 
         if (!topLevel) continue;
 
@@ -247,14 +273,21 @@ foreach (var asm in loaded) {
 
         // ── Properties (DeclaredOnly so we don't duplicate inherited ones) ────
         // Static ones too: theme classes expose their styles as static properties (DataPresenterResourceSet`1.CellValuePresenter).
+        // Protected ones too, which the XML docs list with the public ones (XamGrid.CurrentEditCell, a Cell); they come
+        // second, so a public indexer keeps a name it shares with a protected overload.
         try {
-            var props = t.GetProperties(
-                BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly);
+            const BindingFlags props = BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
 
-            foreach (var prop in props) {
+            foreach (var prop in t.GetProperties(BindingFlags.Public | props)) {
                 try {
                     var entry = BuildPropertyEntry(prop.PropertyType);
                     output[$"{typeKey}.{prop.Name}"] = entry;
+                } catch { /* skip unparseable property */ }
+            }
+            foreach (var prop in t.GetProperties(BindingFlags.NonPublic | props)) {
+                if (!(IsUsable(prop.GetMethod) || IsUsable(prop.SetMethod)) || prop.Name.Contains('.')) continue;
+                try {
+                    if (!output.ContainsKey($"{typeKey}.{prop.Name}")) output[$"{typeKey}.{prop.Name}"] = BuildPropertyEntry(prop.PropertyType);
                 } catch { /* skip unparseable property */ }
             }
         } catch { /* skip inaccessible type */ }
@@ -280,11 +313,15 @@ output["__nonPublicMembers"] = nonPublicMembers;
 output["__members"] = members;
 output["__nonPublicMethods"] = nonPublicMethods;
 output["__memberTypes"] = memberTypes;
+output["__enums"] = enums;
 Console.Error.WriteLine($"[TypeExtractor] phase 2: {output.Count} entries, {baseTypes.Count} base types, {nonPublicMembers.Count} non-public members");
 Console.Error.WriteLine($"[TypeExtractor] phase 2: {members.Count(m => m.Value.ContainsKey("sig"))} signatures, " +
     $"{members.Count(m => m.Value.ContainsKey("overrides"))} overrides of a generic base's method, " +
-    $"{members.Count(m => m.Value.ContainsKey("obsolete"))} obsolete, {members.Count(m => m.Value.ContainsKey("hidden"))} hidden members, " +
+    $"{members.Count(m => m.Value.ContainsKey("obsolete"))} obsolete, {members.Count(m => m.Value.ContainsKey("hidden"))} hidden, " +
+    $"{members.Count(m => m.Value.ContainsKey("protected"))} protected properties / events, " +
     $"{nonPublicMethods.Count} non-public methods, {memberTypes.Count} types covered");
+Console.Error.WriteLine($"[TypeExtractor] phase 2: {enums.Count} enums ({enums.Count(e => e.Value.ContainsKey("flags"))} [Flags]), " +
+    $"{enums.Sum(e => ((Dictionary<string, object>[])e.Value["values"]).Length)} values");
 
 // ── Non-public types ─────────────────────────────────────────────────────────
 // The XML docs also document internal and private nested classes (ActivePaneManager, XamFunnelController, …),

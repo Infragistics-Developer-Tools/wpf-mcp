@@ -29,15 +29,26 @@ const DOCS_CONFIG_FILE = join(ROOT, 'docs', 'docs-common', 'DocsConfig.xml');
 const OUT_DIR         = join(ROOT, 'src', 'data', 'docs');
 const INDEX_FILE      = join(ROOT, 'src', 'data', 'docs-index.json');
 
-// WPF-relevant subfolders from docs-common.
-// Excluded: data-grid (web / Blazor grid — WPF's XamDataGrid is in docs-wpf) and win-web-chart (the Windows Forms /
+// WPF-relevant subfolders from docs-common, each with the DocsConfig.xml variable naming the control it covers.
+// Excluded: data-grid (web / Blazor grid — WPF's XamDataGrid is in docs-wpf), scheduler (the Xamarin.Forms
+// XamScheduler, which the WPF packages don't have — WPF's XamSchedule family is in docs-wpf; the WPF table of contents,
+// toc/master-wpf.toc, never links these topics, and as XamScheduler topics they matched "xamSchedule" searches by
+// substring) and win-web-chart (the Windows Forms /
 // ASP.NET UltraChart: DocsConfig.xml defines its {WawChartName} for those two products only, and its 359 topics
 // never mention a WPF control).
-const COMMON_INCLUDE = new Set([
-  'barcodes', 'bullet-graph', 'category-chart', 'data-chart', 'data-pie-chart',
-  'document-engine', 'donut-chart', 'excel-engine', 'financial-chart', 'funnel-chart',
-  'geographic-map', 'linear-gauge', 'pie-chart', 'productivity-tools', 'radial-gauge',
-  'scheduler', 'shape-chart', 'sparkline', 'spreadsheet', 'surface-chart',
+// A topic whose metadata names no control gets its folder's (none of the 18 shape-chart topics names one, nor 19 of
+// the 32 financial-chart ones), so search_wpf_docs' control filter ranks it with its siblings rather than below the
+// release notes that only mention the control; a folder alias it names ("financial-chart") becomes that control too. excel-engine's {ExcelEngineName} is the "Infragistics Excel Engine"
+// its other topics name. document-engine has no variable, and every one of its topics names its engine already;
+// productivity-tools covers three tools (Control Configurator, App Map, Toolbox), so no one name fits.
+const COMMON_FOLDERS = new Map<string, string | null>([
+  ['barcodes', 'BarcodesName'], ['bullet-graph', 'BulletGraphName'], ['category-chart', 'CategoryChartName'],
+  ['data-chart', 'DataChartName'], ['data-pie-chart', 'DataPieChartName'], ['document-engine', null],
+  ['donut-chart', 'DoughnutChartName'], ['excel-engine', 'ExcelEngineName'], ['financial-chart', 'FinancialChartName'],
+  ['funnel-chart', 'FunnelChartName'], ['geographic-map', 'GeoMapName'], ['linear-gauge', 'LinearGaugeName'],
+  ['pie-chart', 'PieChartName'], ['productivity-tools', null], ['radial-gauge', 'RadialGaugeName'],
+  ['shape-chart', 'ShapeChartName'], ['sparkline', 'SparklineName'], ['spreadsheet', 'SpreadsheetName'],
+  ['surface-chart', 'SurfaceChartName'],
 ]);
 
 // ── DocsConfig variable substitution (WPF product) ────────────────────────────
@@ -106,6 +117,12 @@ function loadWpfVariables(): Map<string, string> {
 
 const WPF_VARS = loadWpfVariables();
 
+const missingFolderVars = [...COMMON_FOLDERS.values()].filter(v => v && !WPF_VARS.has(v));
+assertBuildStep(!existsSync(DOCS_CONFIG_FILE) || missingFolderVars.length === 0,
+  `DocsConfig.xml has no wpf value for ${missingFolderVars.join(', ')} (COMMON_FOLDERS), so that folder's topics ` +
+  `that name no control would get none, and search_wpf_docs' control filter would rank them below passing mentions.`
+);
+
 // The attributes a WPF docs build sets: DocsConfig.xml's <Product Name="wpf" BuildFlags="xaml,wpf"/>.
 function loadWpfBuildFlags(): Set<string> {
   if (!existsSync(DOCS_CONFIG_FILE)) return new Set(['xaml', 'wpf']);   // no docs-common (see loadWpfVariables): its value
@@ -141,7 +158,7 @@ function applyConditionals(raw: string): { text: string; dropped: number } {
   let dropped = 0;
   for (const line of raw.split('\n')) {
     const open = /^ifdef::([^\[]*)\[\]\s*$/.exec(line);
-    if (open) { keep.push(open[1].split(',').some(a => WPF_FLAGS.has(a.trim()))); continue; }
+    if (open) { keep.push(open[1].split(',').some(a => WPF_FLAGS.has(a.trim().toLowerCase()))); continue; }   // one source writes ifdef::XAML[]
     if (/^endif::[^\[]*\[\]\s*$/.test(line)) { keep.pop(); continue; }   // a stray endif (3 in the sources) is a no-op
     if (keep.every(Boolean)) out.push(line); else dropped += line.length + 1;
   }
@@ -198,6 +215,12 @@ export interface DocEntry extends DocIndexEntry {
 // Matches a localized sibling such as "datagrid-column-pinning.ja-JP".
 const LOCALIZED_FILE = /\.[a-z]{2}-[A-Z]{2}$/;
 
+/** A metadata control name that is only the docs-common folder's name for its control: "financial-chart" or "FinancialChart" for XamFinancialChart. */
+function isFolderAlias(name: string, folder: string, control: string): boolean {
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return norm(name) === norm(folder) || `xam${norm(name)}` === norm(control);
+}
+
 /** Extract the JSON metadata block: |metadata| { ... } |metadata| */
 function parseMetadata(raw: string): AdocMetadata | null {
   const m = raw.match(/\|metadata\|([\s\S]*?)\|metadata\|/);
@@ -212,15 +235,21 @@ function parseMetadata(raw: string): AdocMetadata | null {
 /**
  * Extract the document title (first `= Heading` line outside the metadata comment block).
  * Strips the //// comment wrapper first so = chars inside JSON are ignored.
+ * Without one, the first heading is the title when every other heading is below it: nuget-packages and
+ * wpf-about-trial-assemblies open with `== Title` over `===` sections. A `== Topic Overview` or `== In This Topic`
+ * followed by other `==` sections is a section, not a title.
  */
 function extractTitle(raw: string): string {
   // Remove //// comment blocks so we don't match = inside JSON
   const withoutComments = raw.replace(/\/\/\/\/[\s\S]*?\/\/\/\//g, '');
+  const headings: { level: number; text: string }[] = [];
   for (const line of withoutComments.split('\n')) {
-    const m = line.match(/^= (.+)/);
-    if (m) return m[1].trim();
+    const m = line.match(/^(={1,6}) (.+)/);
+    if (m?.[1] === '=') return m[2].trim();
+    if (m) headings.push({ level: m[1].length, text: m[2].trim() });
   }
-  return '';
+  const [first, ...rest] = headings;
+  return first && rest.every(h => h.level > first.level) ? first.text : '';
 }
 
 /**
@@ -323,10 +352,12 @@ function stripProse(raw: string): string {
 
 // ── File processor ────────────────────────────────────────────────────────────
 
-function processFile(filePath: string, source: 'wpf' | 'common'): DocEntry | null {
+function processFile({ path: filePath, source, folder }: FileSource): DocEntry | null {
   let raw: string;
   try {
-    raw = readFileSync(filePath, 'utf-8');
+    // All but a handful of the sources start with a UTF-8 byte-order mark, which readFileSync keeps: it hid the
+    // `= Title` on line 1, and with it 86 topics that have no metadata name (all 18 shape-chart ones, for instance).
+    raw = readFileSync(filePath, 'utf-8').replace(/^\uFEFF/, '');
   } catch {
     return null;
   }
@@ -344,15 +375,23 @@ function processFile(filePath: string, source: 'wpf' | 'common'): DocEntry | nul
   if (isForOtherPlatforms(meta)) { otherPlatformTopics++; return null; }
   const title = extractTitle(raw);
 
-  // Some real topics (the whole financial-chart family, several data-chart ones) carry no
-  // `name` in their metadata block. Fall back to the filename rather than dropping them,
+  // Some real topics (19 of the 32 financial-chart ones, all of shape-chart, the changelog and release notes) carry no
+  // `name` in their metadata block, or no metadata at all. Fall back to the filename rather than dropping them,
   // but only when the file has a real heading — untitled files are fragments and data
   // dumps — and never for a localized copy, whose slug would duplicate the English topic.
   const fileSlug = basename(filePath, '.adoc');
-  if (!meta?.name && (!title || LOCALIZED_FILE.test(fileSlug))) return null;
+  if (!meta?.name && (!title || LOCALIZED_FILE.test(fileSlug))) { if (!title) untitled++; return null; }
 
   const slug         = meta?.name?.trim() || fileSlug;
-  const controlNames = (meta?.controlName ?? []).map(s => s.trim()).filter(Boolean);
+  // A docs-common topic that names no control gets its folder's. An unresolved {Placeholder} names none
+  // (data-pie-chart-data-binding's {DataDataPieChartName}, a typo), and the folder's own alias ("financial-chart",
+  // "FinancialChart" in 13 financial-chart topics) stands for its control: an alias only half-matches the control
+  // filter, so those topics ranked below the ones that name no control.
+  const folderVar     = folder ? COMMON_FOLDERS.get(folder) : null;
+  const folderControl = folderVar ? WPF_VARS.get(folderVar)! : null;
+  const named         = (meta?.controlName ?? []).map(s => s.trim()).filter(s => s && !/\{[A-Za-z0-9_.-]+\}/.test(s))
+    .map(s => folderControl && isFolderAlias(s, folder!, folderControl) ? folderControl : s);
+  const controlNames  = named.length || !folderControl ? [...new Set(named)] : [folderControl];
   const tags         = (meta?.tags ?? []).map(s => s.trim()).filter(Boolean);
   const xamlSnippets = extractXamlSnippets(raw);
   const body         = stripAdoc(raw);
@@ -394,7 +433,8 @@ function collectAdoc(dir: string): string[] {
   return results;
 }
 
-interface FileSource { path: string; source: 'wpf' | 'common' }
+/** `folder`: the docs-common folder (COMMON_FOLDERS key) the file is in. */
+interface FileSource { path: string; source: 'wpf' | 'common'; folder?: string }
 
 function discoverFiles(): FileSource[] {
   const files: FileSource[] = [];
@@ -413,11 +453,11 @@ function discoverFiles(): FileSource[] {
 
   if (existsSync(DOCS_COMMON_DIR)) {
     for (const folder of readdirSync(DOCS_COMMON_DIR)) {
-      if (!COMMON_INCLUDE.has(folder)) continue;
+      if (!COMMON_FOLDERS.has(folder)) continue;
       const folderPath = join(DOCS_COMMON_DIR, folder);
       if (!statSync(folderPath).isDirectory()) continue;
       for (const f of collectAdoc(folderPath)) {
-        files.push({ path: f, source: 'common' });
+        files.push({ path: f, source: 'common', folder });
       }
     }
   } else {
@@ -438,17 +478,22 @@ console.log(`Discovered ${files.length} .adoc files  (wpf + common)`);
 
 const index: DocIndexEntry[] = [];
 let skipped = 0;
-let droppedChars = 0, topicsTrimmed = 0, otherPlatformTopics = 0;
+let droppedChars = 0, topicsTrimmed = 0, otherPlatformTopics = 0, untitled = 0;
 const slugSeen = new Set<string>();
+// docs-common folder → its .adoc files and the topics written from them
+const folderCounts = new Map<string, { files: number; topics: number }>();
+for (const { folder } of files) {
+  if (folder) folderCounts.set(folder, { files: (folderCounts.get(folder)?.files ?? 0) + 1, topics: 0 });
+}
 
-for (const { path, source } of files) {
-  const entry = processFile(path, source);
+for (const file of files) {
+  const entry = processFile(file);
 
   if (!entry) { skipped++; continue; }
 
   // Deduplicate: docs-wpf takes precedence over docs-common for the same slug
   if (slugSeen.has(entry.slug)) {
-    if (source === 'common') { skipped++; continue; }
+    if (file.source === 'common') { skipped++; continue; }
     // Replace existing common entry with wpf entry (update index + overwrite file)
     const idx = index.findIndex(e => e.slug === entry.slug);
     if (idx !== -1) index.splice(idx, 1);
@@ -464,6 +509,7 @@ for (const { path, source } of files) {
   );
 
   index.push(indexEntry);
+  if (file.folder) folderCounts.get(file.folder)!.topics++;
 }
 
 // Sort index alphabetically by slug for deterministic output
@@ -482,6 +528,26 @@ assertBuildStep(
   new Set(index.map(e => e.slug.toLowerCase())).size === index.length,
   `Two topics have slugs differing only in letter case. Their .json files collide on a ` +
   `case-insensitive filesystem, so one would silently overwrite the other.`
+);
+
+// A topic without a metadata name is kept only with a title. The byte-order mark nearly every source starts with once
+// hid the title of 86 of them, and they were left out unseen: all of shape-chart, 19 of 32 financial-chart topics, the
+// changelog. What is left out now is two include:: fragments (shared-*) that open with a section, not a title.
+assertBuildStep(untitled <= 5,
+  `${untitled} topics that have no metadata name were left out because extractTitle found no title in them — the ` +
+  `title detection no longer matches the sources (a byte-order mark or a new heading form), so whole families of ` +
+  `topics (shape-chart, financial-chart, the release notes) would be missing from search_wpf_docs.`
+);
+
+// Every docs-common folder keeps a fair share of its topics: a folder renamed upstream would drop out of COMMON_FOLDERS
+// unseen, and the lost titles above had taken shape-chart to 0 of 18 topics. (Duplicate metadata names already cost
+// data-pie-chart half of its 10: five are named "piechart-selection".)
+const thinFolders = !existsSync(DOCS_COMMON_DIR) ? [] : [...COMMON_FOLDERS.keys()]
+  .map(f => ({ f, ...(folderCounts.get(f) ?? { files: 0, topics: 0 }) }))
+  .filter(c => c.topics === 0 || c.topics < c.files / 3);
+assertBuildStep(thinFolders.length === 0,
+  `docs-common folders with too few topics written: ${thinFolders.map(c => `${c.f} (${c.topics} of ${c.files} files)`).join(', ')}. ` +
+  `Either the folder is gone from docs/docs-common/topics/en (update COMMON_FOLDERS) or processFile drops its topics.`
 );
 
 // A pick:[…] left in a written topic means resolvePicks' pattern no longer matches the sources' form.
@@ -503,6 +569,6 @@ console.log(`  Topics written : ${index.length}`);
 console.log(`  Code blocks    : ${fenced}`);
 console.log(`  Other platforms: ${otherPlatformTopics} topics built only for them left out; ${topicsTrimmed} topics lost ` +
   `${droppedChars} chars of non-WPF ifdef:: blocks (WPF flags: ${[...WPF_FLAGS].join(', ')})`);
-console.log(`  Skipped        : ${skipped}  (no metadata or empty)`);
+console.log(`  Skipped        : ${skipped}  (other platforms, ${untitled} untitled without a metadata name, duplicate slugs, empty)`);
 console.log(`  Index          : ${INDEX_FILE}`);
 console.log(`  Full content   : ${OUT_DIR}/  (${index.length} files)`);

@@ -24,9 +24,17 @@ public sealed record ApiMemberEntry(
     string? DeclaredOn,
     bool? IsField = null,          // a static ResourceKey/RoutedCommand field, listed with the properties
     string? Signature = null,      // methods, constructors and indexers: "void Export(OutputFormat outputFormat, string fileName)"
-    ParamDoc[]? Parameters = null);
+    ParamDoc[]? Parameters = null,
+    bool? IsProtected = null);     // a protected property or event (methods say so in their signature)
 
 public sealed record ParamDoc(string Name, string Summary);
+
+/// One value of an enum, in declaration order.
+public sealed record EnumValue(
+    string Name,
+    long Value,
+    string Summary,
+    string? Obsolete = null);      // the [Obsolete] message, usually naming the replacement
 
 /// A member marked [Obsolete]: left out of the member lists, kept so a lookup by name gets the replacement.
 public sealed record ObsoleteMember(
@@ -55,7 +63,9 @@ public sealed record ApiEntry(
     string? XamlName = null,    // nested types only: "Outer+Inner"
     ApiMemberEntry[]? Constructors = null,   // public ones that take parameters
     ObsoleteMember[]? Obsolete = null,
-    string? ObsoleteMessage = null);         // the type itself is [Obsolete]
+    string? ObsoleteMessage = null,          // the type itself is [Obsolete]
+    EnumValue[]? Values = null,              // enums only
+    bool? IsFlags = null);                   // a [Flags] enum
 
 /// Compact entry in search-index.json — single-letter keys keep the ~5MB index small.
 public sealed record SearchIndexEntry(

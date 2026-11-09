@@ -199,6 +199,18 @@ export interface ApiMemberEntry {
   signature?: string;
   /** The XML docs' parameter descriptions (methods and constructors). */
   parameters?: ParamDoc[];
+  /** A protected (or protected internal) property or event: usable only from a subclass. Methods say so in their signature. */
+  isProtected?: boolean;
+}
+
+/** One value of an enum, in declaration order. */
+export interface EnumValueEntry {
+  name: string;
+  /** Its number (the enum's underlying type, as a JSON number). */
+  value: number;
+  summary: string;
+  /** Set when the value is [Obsolete]: its message, which usually names the replacement. */
+  obsolete?: string;
 }
 
 /** A member marked [Obsolete]: left out of the member lists, kept so a lookup by name gets the replacement. */
@@ -241,6 +253,10 @@ export interface ApiEntry {
   obsolete?: ObsoleteMember[];
   /** Set when the type itself is [Obsolete]: its message, which usually names the replacement. */
   obsoleteMessage?: string;
+  /** Enums only: their values, in declaration order (those hidden from IntelliSense left out). */
+  values?: EnumValueEntry[];
+  /** Enums only, when [Flags]: values combine. */
+  isFlags?: boolean;
 }
 
 export interface RegistryEntry {
@@ -265,7 +281,10 @@ interface TypeInfoEntry {
 interface XamlTypeInfo { xmlns: string; prefix: string; ns: string; xamlName?: string }
 
 /** What reflection says about one member, keyed by "Assembly|<XML doc ID>" (see "__members" in type-extractor/Program.cs). */
-interface MemberMeta { sig?: string; params?: string[]; overrides?: string; obsolete?: string; hidden?: boolean }
+interface MemberMeta { sig?: string; params?: string[]; overrides?: string; obsolete?: string; hidden?: boolean; protected?: boolean }
+
+/** One enum's values in declaration order, keyed by "Assembly|Namespace.Type" (see "__enums" in type-extractor/Program.cs). */
+interface EnumInfo { flags?: boolean; values: { name: string; value: number }[] }
 
 function loadTypeInfo(): Record<string, TypeInfoEntry | string> {
   const path = join(ROOT, 'nuget', 'type-info.json');
@@ -302,13 +321,13 @@ function loadTypeInfo(): Record<string, TypeInfoEntry | string> {
 /**
  * The extractor's maps keyed by "Assembly|Namespace.Type" (nested: "…|Namespace.Outer.Inner"), so types that share
  * a short name can't overwrite each other: each type's XAML namespace and prefix, its Infragistics base type, the
- * types and members ("…|Namespace.Type.Member") that are not public, signatures and [Obsolete] / hidden flags by
- * doc ID ("…|M:Namespace.Type.Load(System.String)") for the types in memberTypes, and the doc IDs of their internal /
- * private methods and constructors.
+ * types and members ("…|Namespace.Type.Member") that are not public, signatures and [Obsolete] / hidden / protected
+ * flags by doc ID ("…|M:Namespace.Type.Load(System.String)") for the types in memberTypes, the doc IDs of their
+ * internal / private methods and constructors, and every enum's values.
  */
 function loadExtractorMaps(): {
   xaml: Record<string, XamlTypeInfo>; baseTypes: Record<string, string>; nonPublic: Set<string>; nonPublicMembers: Set<string>;
-  members: Record<string, MemberMeta>; nonPublicMethods: Set<string>; memberTypes: Set<string>;
+  members: Record<string, MemberMeta>; nonPublicMethods: Set<string>; memberTypes: Set<string>; enums: Record<string, EnumInfo>;
 } {
   const parsed = JSON.parse(readFileSync(join(ROOT, 'nuget', 'type-info.json'), 'utf-8'));
   const xaml = parsed.__xaml as Record<string, XamlTypeInfo> | undefined;
@@ -318,17 +337,24 @@ function loadExtractorMaps(): {
   const members = parsed.__members as Record<string, MemberMeta> | undefined;
   const nonPublicMethods = parsed.__nonPublicMethods as string[] | undefined;
   const memberTypes = parsed.__memberTypes as string[] | undefined;
+  const enums = parsed.__enums as Record<string, EnumInfo> | undefined;
   assertBuildStep(!!xaml && Object.keys(xaml).length > 0 && !!baseTypes && Object.keys(baseTypes).length > 0 &&
     !!nonPublic?.length && !!nonPublicMembers?.length && !!members && Object.keys(members).length > 0 &&
-    !!nonPublicMethods?.length && !!memberTypes?.length,
+    !!nonPublicMethods?.length && !!memberTypes?.length && !!enums && Object.keys(enums).length > 0,
     `nuget/type-info.json has no "__xaml" / "__baseTypes" / "__nonPublicTypes" / "__nonPublicMembers" / "__members" / ` +
-    `"__nonPublicMethods" / "__memberTypes" section — it was written by an older type extractor, so every type would get ` +
-    `a guessed xmlns, no inherited members, internal classes and members would be indexed as usable, and methods would ` +
-    `have no signatures. Run: npm run generate:types`
+    `"__nonPublicMethods" / "__memberTypes" / "__enums" section — it was written by an older type extractor, so every type ` +
+    `would get a guessed xmlns, no inherited members, internal classes and members would be indexed as usable, methods ` +
+    `would have no signatures and enums no values. Run: npm run generate:types`
+  );
+  // Pages hold the numbers as JSON numbers, which the C# server reads as long: fail rather than round one.
+  const unsafe = Object.entries(enums!).flatMap(([k, e]) => e.values.filter(v => !Number.isSafeInteger(v.value)).map(v => `${k}.${v.name}`));
+  assertBuildStep(unsafe.length === 0,
+    `${unsafe.length} enum value(s) in nuget/type-info.json "__enums" are not safe JSON integers (e.g. ${unsafe.slice(0, 3).join(', ')}) — ` +
+    `a ulong enum over 2^53? Write those values as strings (extractor, build-api, server/Data/Models.cs EnumValue).`
   );
   return {
     xaml: xaml!, baseTypes: baseTypes!, nonPublic: new Set(nonPublic), nonPublicMembers: new Set(nonPublicMembers),
-    members: members!, nonPublicMethods: new Set(nonPublicMethods), memberTypes: new Set(memberTypes),
+    members: members!, nonPublicMethods: new Set(nonPublicMethods), memberTypes: new Set(memberTypes), enums: enums!,
   };
 }
 
@@ -434,8 +460,9 @@ async function generate() {
   mkdirSync(API_OUT_DIR, { recursive: true });
 
   const typeInfo = loadTypeInfo();
-  const { xaml: xamlTypes, baseTypes, nonPublic, nonPublicMembers, members: memberMeta, nonPublicMethods, memberTypes } = loadExtractorMaps();
+  const { xaml: xamlTypes, baseTypes, nonPublic, nonPublicMembers, members: memberMeta, nonPublicMethods, memberTypes, enums } = loadExtractorMaps();
   let skippedNonPublic = 0, skippedNonPublicMembers = 0, skippedObsolete = 0, skippedHidden = 0;
+  let hiddenValues = 0;
   const hiddenTypes: string[] = [];
   let methodsKept = 0, methodsSigned = 0;
   const unmatchedMethods: string[] = [];
@@ -525,11 +552,13 @@ async function generate() {
       if (!covered) uncoveredTypes.push(type.fullName);
       const meta = (m: RawMember): MemberMeta | undefined => memberMeta[`${assemblyName}|${m.kind}:${m.fullName}`];
 
+      // Protected (and protected internal) properties and events look like public ones in the XML docs.
+      const isProtected = (m: RawMember) => meta(m)?.protected ? { isProtected: true } : {};
       const withTypeInfo = (m: RawMember) => {
         const ti = typeInfo[`${assemblyName}|${type.fullName}.${m.name}`];
         const extra = (ti && typeof ti === 'object') ? ti : {};
         const signature = meta(m)?.sig;   // indexers: "double this[int index]"
-        return { name: m.name, summary: m.summary, ...extra, ...(signature ? { signature } : {}) };
+        return { name: m.name, summary: m.summary, ...extra, ...(signature ? { signature } : {}), ...isProtected(m) };
       };
       // Operators read as C# ("operator ==", "implicit operator WorkbookColorInfo"), generic methods without the
       // doc ID's "``2" (the signature has the type parameters).
@@ -596,6 +625,21 @@ async function generate() {
       methodsKept += methods.length + constructors.length + unmatched.filter(m => m.name === '#ctor').length;
       methodsSigned += [...methods, ...constructors].filter(m => m.signature).length;
 
+      // An enum's values come from the extractor, in declaration order and with their numbers; the XML's "F:" entries
+      // only add summaries. Values hidden from IntelliSense are left out, [Obsolete] ones stay, marked (old code still
+      // uses them; obsolete wins over hidden, as for members).
+      const enumInfo = enums[`${assemblyName}|${type.fullName}`];
+      let values: EnumValueEntry[] | undefined;
+      if (enumInfo) {
+        const summaries = new Map(bucket.fields.map(f => [f.name, f.summary]));
+        values = enumInfo.values.flatMap(v => {
+          const flags = memberMeta[`${assemblyName}|F:${type.fullName}.${v.name}`];
+          if (flags?.hidden && flags.obsolete === undefined) { hiddenValues++; return []; }
+          return [{ name: v.name, value: v.value, summary: summaries.get(v.name) ?? '',
+                    ...(flags?.obsolete !== undefined ? { obsolete: flags.obsolete } : {}) }];
+        });
+      }
+
       const entry: ApiEntry = {
         component:      typeName,
         assembly:       assemblyName,
@@ -608,13 +652,15 @@ async function generate() {
         remarks:        type.remarks,
         // Static key/command fields are listed with the properties: both are used the same way in XAML.
         properties: [...props, ...fields].filter(current).map(withTypeInfo),
-        events:     events.filter(current).map(m => ({ name: m.name, summary: m.summary })),
+        events:     events.filter(current).map(m => ({ name: m.name, summary: m.summary, ...isProtected(m) })),
         methods,
         ...(constructors.length ? { constructors } : {}),
         ...(obsolete.length ? { obsolete } : {}),
         // An [Obsolete] type keeps its page (old code and docs use UnboundField), which then leads with the replacement.
         ...(memberMeta[`${assemblyName}|T:${type.fullName}`]?.obsolete !== undefined
           ? { obsoleteMessage: memberMeta[`${assemblyName}|T:${type.fullName}`].obsolete } : {}),
+        ...(values ? { values } : {}),
+        ...(enumInfo?.flags ? { isFlags: true } : {}),
       };
       const flagged = (m: RawMember) => meta(m)?.obsolete !== undefined || !!meta(m)?.hidden;
       const hiddenOrObsolete = [
@@ -704,6 +750,16 @@ async function generate() {
   // Enrich in-memory, then write everything at once
   console.log(`Enriching inheritance...`);
   const enriched = enrichWithInheritance(entries, baseTypes, allTypes);
+
+  const enumPages = [...entries.values()].filter(e => e.values);
+  console.log(`Enums: ${enumPages.length} pages (${enumPages.filter(e => e.isFlags).length} [Flags]) list ` +
+    `${enumPages.reduce((n, e) => n + e.values!.length, 0)} values (${hiddenValues} hidden from IntelliSense left out); ` +
+    `${[...entries.values()].reduce((n, e) => n + [...e.properties, ...e.events].filter(m => m.isProtected).length, 0)} ` +
+    `protected properties / events across the pages, inherited copies included.`);
+  assertBuildStep(enumPages.length > 0,
+    `No API page has enum values, though nuget/type-info.json has ${Object.keys(enums).length} in "__enums" — its keys no ` +
+    `longer match the XML docs' type names. Every enum page would say it has no members.`
+  );
 
   const escaped = [...entries.values()].filter(e => /\\\\u00[0-9A-Fa-f]{2}/.test(JSON.stringify(e)));
   assertBuildStep(escaped.length === 0,

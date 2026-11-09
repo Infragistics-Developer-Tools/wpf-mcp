@@ -95,9 +95,12 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
 
     private static string FormatMember(ApiMemberEntry m, bool withParameters)
     {
-        // A signature names the type itself: "void Export(OutputFormat outputFormat)", "double this[int index]".
+        // A signature names the type itself: "void Export(OutputFormat outputFormat)", "double this[int index]", "protected"
+        // and "int?" included. Otherwise a Nullable<T> comes as TypeName T with IsNullable set.
         var line = m.Signature is { } signature ? $"- `{signature}`" : $"- **{m.Name}**";
-        if (m.Signature is null && !string.IsNullOrEmpty(m.TypeName)) line += $" `{m.TypeName}`";
+        if (m.Signature is null && !string.IsNullOrEmpty(m.TypeName)) line += $" `{m.TypeName}{(m.IsNullable == true ? "?" : "")}`";
+        // The XML docs list protected properties and events with the public ones (XamGrid.CurrentEditCell): CS0122 outside a subclass.
+        if (m.Signature is null && m.IsProtected == true) line += " _(protected)_";
         if (m.IsEnum == true && m.EnumValues is { Length: > 0 })
             line += $" — values: `{string.Join("` | `", m.EnumValues)}`";
         if (m.IsField == true) line += " _(static field)_";
@@ -116,7 +119,10 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
     // How much detail the member sections get, tried in this order; the first rendering that fits wins.
     // Properties keep full detail the longest because they are what XAML needs (types, enum values):
     // on the grids nearly every property is inherited, so compacting inherited members first would
-    // hide exactly those. Events and methods are one `member` call away.
+    // hide exactly those. Events and methods are one `member` call away. Before the next level, a level is tried
+    // with its protected properties and events by name only (protectedByName): only a subclass can use them, and
+    // their types and markers would push the kind "properties" responses of 21 types (20 chart series and SeriesViewer)
+    // past 25K and down to CompactInherited or lower.
     private enum ApiDetail { Full, CompactEventsMethods, CompactInherited, CompactAll }
 
     private static bool IsCompact(ApiDetail detail, string kindKey, bool inherited) => detail switch
@@ -127,21 +133,45 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
         _ => true,
     };
 
-    private static string CompactionSummary(ApiDetail detail) => detail switch
+    private static string CompactionSummary(ApiDetail detail, bool protectedByName) => (detail, protectedByName) switch
     {
-        ApiDetail.CompactEventsMethods => "events and methods are listed by name only (properties keep full detail)",
-        ApiDetail.CompactInherited => "inherited members are listed by name only (members declared on this type keep full detail)",
+        (ApiDetail.Full, _) => "protected properties and events are listed by name only (public members keep full detail)",
+        (ApiDetail.CompactEventsMethods, false) => "events and methods are listed by name only (properties keep full detail)",
+        (ApiDetail.CompactEventsMethods, true) => "events, methods and protected properties are listed by name only (public properties keep full detail)",
+        (ApiDetail.CompactInherited, false) => "inherited members are listed by name only (members declared on this type keep full detail)",
+        (ApiDetail.CompactInherited, true) => "inherited members and protected properties and events are listed by name only (public members declared on this type keep full detail)",
         _ => "all members are listed by name only",
     };
 
-    // Compact rendering: one line of names per section, an overloaded name once with its count; details come from a `member` call.
-    private static string FormatMemberNames(IEnumerable<ApiMemberEntry> items) =>
-        string.Join(", ", items.GroupBy(m => m.Name).Select(g => g.Count() > 1 ? $"`{g.Key}` ({g.Count()})" : $"`{g.Key}`"));
+    // Properties and events carry the flag; methods (and indexers) say "protected" in their signature.
+    private static bool IsProtected(ApiMemberEntry m) =>
+        m.Signature is { } signature ? signature.StartsWith("protected ", StringComparison.Ordinal) : m.IsProtected == true;
 
-    private static List<string> RenderMemberSections((ApiMemberEntry m, string kind)[] members, ApiDetail detail, bool withParameters)
+    // What the protectedByName levels list by name: protected properties and events, whose full lines carry a type and a
+    // marker. A protected method's full line is its signature, which says so already.
+    private static bool IsProtectedMember(ApiMemberEntry m) => m.Signature is null && m.IsProtected == true;
+
+    // Compact rendering: one line of names per section, an overloaded name once with its count; details come from a `member` call.
+    // Protected members come last, after "protected:", so a name-only list doesn't pass them off as public; a method name
+    // only when every overload listed is protected (one public overload makes the name callable).
+    private static string FormatMemberNames(IEnumerable<ApiMemberEntry> items)
+    {
+        static string Names(IEnumerable<IGrouping<string, ApiMemberEntry>> groups) =>
+            string.Join(", ", groups.Select(g => g.Count() > 1 ? $"`{g.Key}` ({g.Count()})" : $"`{g.Key}`"));
+        var byName = items.GroupBy(m => m.Name).ToLookup(g => g.All(IsProtected));
+        var open = Names(byName[false]);
+        if (!byName.Contains(true)) return open;
+        return $"{open}{(open.Length > 0 ? "; " : "")}protected: {Names(byName[true])}";
+    }
+
+    private static List<string> RenderMemberSections((ApiMemberEntry m, string kind)[] members, ApiDetail detail, bool protectedByName, bool withParameters)
     {
         var output = new List<string>();
         string Format(ApiMemberEntry m) => FormatMember(m, withParameters);
+        IEnumerable<string> Detailed(ApiMemberEntry[] group) =>
+            protectedByName && group.Any(IsProtectedMember)
+                ? group.Where(m => !IsProtectedMember(m)).Select(Format).Append($"- {FormatMemberNames(group.Where(IsProtectedMember))}")
+                : group.Select(Format);
         foreach (var (label, kindKey) in new[] { ("Constructors", "constructor"), ("Properties", "property"), ("Events", "event"), ("Methods", "method") })
         {
             var items = members.Where(m => m.kind == kindKey).Select(m => m.m).ToArray();
@@ -156,16 +186,37 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
                 output.Add("");
                 output.Add($"### {label}");
                 if (IsCompact(detail, kindKey, inherited: false)) output.Add(FormatMemberNames(direct));
-                else output.AddRange(direct.Select(Format));
+                else output.AddRange(Detailed(direct));
             }
             foreach (var group in inherited)
             {
                 output.Add("");
                 output.Add($"### {label} (inherited from `{group.Key}`)");
                 if (IsCompact(detail, kindKey, inherited: true)) output.Add(FormatMemberNames(group));
-                else output.AddRange(group.Select(Format));
+                else output.AddRange(Detailed(group.ToArray()));
             }
         }
+        return output;
+    }
+
+    // An enum's values in declaration order, with their numbers: "- **XPS** = 0: Exports to XPS format". A [Flags] enum
+    // says how its values combine, with two of its own single-bit values as the example (without one when it has fewer:
+    // LicenseOptions). Compact: names only (UTMZone has 1,197 values).
+    private static List<string> RenderValues(ApiEntry doc, EnumValue[] values, bool compact)
+    {
+        if (values.Length == 0) return [];
+        var output = new List<string> { "", "### Values" };
+        if (doc.IsFlags == true)
+        {
+            var pair = values.Where(v => v.Obsolete is null && v.Value > 0 && (v.Value & (v.Value - 1)) == 0).Take(2).ToArray();
+            output.Add(pair is [var a, var b]
+                ? $"_[Flags] enum: values combine — `{doc.Component}.{a.Name} | {doc.Component}.{b.Name}` in C#, `\"{a.Name}, {b.Name}\"` in a XAML attribute._"
+                : "_[Flags] enum: values combine with `|` in C#, comma-separated in a XAML attribute._");
+        }
+        if (compact) output.Add(string.Join(", ", values.Select(v => $"`{v.Name}`")));
+        else output.AddRange(values.Select(v =>
+            $"- **{v.Name}** = {v.Value}: {(string.IsNullOrEmpty(v.Summary) ? "—" : v.Summary)}" +
+            (v.Obsolete is { } message ? $" ⚠ OBSOLETE: {(string.IsNullOrEmpty(message) ? "don't use it." : message)}" : "")));
         return output;
     }
 
@@ -179,14 +230,14 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             """)]
         [MinLength(1), MaxLength(128)]
         string component,
-        [Description("""Member category to return. Defaults to "all". Use a specific category when the user asks only about properties, methods, or events.""")]
+        [Description("""Member category to return. Defaults to "all". Use a specific category when the user asks only about properties, methods, or events. An enum's values come back with any kind.""")]
         MemberKind kind = MemberKind.all,
         [Description("""
             Optional member name filter — case-insensitive substring, combinable with "kind".
                   Returns only the matching members, including inherited ones, with full detail (type, enum values, summary;
                   for methods and constructors the signature of every overload and its parameter descriptions).
                   Examples: "YAxis" (every YAxis* member), "FieldLayout", "Changed". Use it to check specific members on a large type,
-                  or to get details of members a compacted response lists by name only.
+                  or to get details of members a compacted response lists by name only. On an enum it filters the values.
             """)]
         [MaxLength(128)]
         string? member = null)
@@ -249,10 +300,14 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
         if (doc.Alternates is { Length: > 0 })
         {
             var memberCount = doc.Properties.Length + doc.Events.Length + doc.Methods.Length;
+            // Member counts say nothing about enums, which have values instead (every one would read "0 members").
+            var count = doc.Values is { } enumValues ? $"{enumValues.Length} values" : $"{memberCount} members";
             output.Add("");
-            output.Add($"⚠️ **\"{doc.Component}\" is ambiguous** — {doc.Alternates.Length} other Infragistics type(s) share this name, each in a different namespace/package with its own xmlns. This page documents `{doc.DotnetNamespace}.{doc.Component}` ({memberCount} members), the most fully documented one. The others are not indexed separately:");
-            output.AddRange(doc.Alternates.Select(a => $"- `{a.FullName}` — {a.MemberCount} members, NuGet `{a.NugetPackage}`"));
-            output.Add("If the members below don't match the control you're using, you're likely on the other type — confirm which package/xmlns your project references before writing XAML.");
+            output.Add($"⚠️ **\"{doc.Component}\" is ambiguous** — {doc.Alternates.Length} other Infragistics type(s) share this name, each in a different namespace/package with its own xmlns. This page documents `{doc.DotnetNamespace}.{doc.Component}` ({count}), the most fully documented one. The others are not indexed separately:");
+            output.AddRange(doc.Alternates.Select(a => doc.Values is null
+                ? $"- `{a.FullName}` — {a.MemberCount} members, NuGet `{a.NugetPackage}`"
+                : $"- `{a.FullName}` — NuGet `{a.NugetPackage}`"));
+            output.Add($"If the {(doc.Values is null ? "members" : "values")} below don't match the control you're using, you're likely on the other type — confirm which package/xmlns your project references before writing XAML.");
         }
 
         if (!string.IsNullOrEmpty(doc.Remarks))
@@ -263,7 +318,18 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
         }
 
         var kindPrefix = kind == MemberKind.all ? "" : kind + " ";
-        if (!string.IsNullOrEmpty(memberFilter))
+        // An enum has values instead of members: listed with any `kind` (hiding them for kind "properties" would bring
+        // back the "no members" answer), filtered by name with `member`.
+        var values = doc.Values;
+        if (!string.IsNullOrEmpty(memberFilter) && values is not null)
+        {
+            values = values.Where(v => v.Name.Contains(memberFilter, StringComparison.OrdinalIgnoreCase)).ToArray();
+            output.Add("");
+            output.Add(values.Length > 0
+                ? $"_Showing {values.Length} {(values.Length == 1 ? "value" : "values")} whose name contains \"{memberFilter}\"._"
+                : $"_No values whose name contains \"{memberFilter}\". Call get_wpf_api_reference(\"{doc.Component}\") without \"member\" to see every value._");
+        }
+        else if (!string.IsNullOrEmpty(memberFilter))
         {
             members = members.Where(m => m.m.Name.Contains(memberFilter, StringComparison.OrdinalIgnoreCase)).ToArray();
             var (one, many) = kind switch
@@ -292,7 +358,7 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
         }
 
         var footer = new List<string>();
-        if (members.Length == 0 && string.IsNullOrEmpty(memberFilter))
+        if (members.Length == 0 && string.IsNullOrEmpty(memberFilter) && values is null)
         {
             var baseHint = !string.IsNullOrEmpty(doc.BaseType)
                 ? $"Call get_wpf_api_reference(\"{doc.BaseType}\") to see the inherited API surface."
@@ -302,8 +368,9 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             footer.Add($"_This type's own API surface is empty or was filtered by \"kind\". {baseHint}_");
         }
 
-        // Theming hint only when the type has Brush-typed members AND ships with named themes.
-        var brushMembers = allMembers.Where(m => m.m.TypeName?.Contains("Brush", StringComparison.Ordinal) == true).Select(m => m.m).ToArray();
+        // Theming hint only when the type has Brush-typed members AND ships with named themes. Not protected ones
+        // (XamChart3D.CrosshairRamp): an app can't set those.
+        var brushMembers = allMembers.Where(m => m.m.IsProtected != true && m.m.TypeName?.Contains("Brush", StringComparison.Ordinal) == true).Select(m => m.m).ToArray();
         if (brushMembers.Length > 0 && ThemeLookup.IsThemeable(doc.Component, store.ThemeIndex))
         {
             var examples = string.Join(", ", brushMembers.Take(3).Select(m => $"`{m.Name}`"));
@@ -312,25 +379,41 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
         }
 
         var withParameters = !string.IsNullOrEmpty(memberFilter);
-        string Render(ApiDetail detail, string? note = null) => string.Join('\n',
-            (note is null ? output : output.Append("").Append(note)).Concat(RenderMemberSections(members, detail, withParameters)).Concat(footer));
+        string Render(ApiDetail detail, string? note = null, bool protectedByName = false) => string.Join('\n',
+            (note is null ? output : output.Append("").Append(note))
+                .Concat(values is null ? [] : RenderValues(doc, values, compact: detail == ApiDetail.CompactAll))
+                .Concat(RenderMemberSections(members, detail, protectedByName, withParameters)).Concat(footer));
         var text = Render(ApiDetail.Full);
 
         // Size guard: take the first level of ApiDetail whose rendering, note included, fits. Headings
         // stay, so "inherited from" remains visible; the note tells the agent how to get full details.
-        if (text.Length > MaxApiReferenceChars)
+        // An enum (no members) only has the last level: its values by name.
+        if (text.Length > MaxApiReferenceChars && values is not null)
+        {
+            var next = string.IsNullOrEmpty(memberFilter)
+                ? $"Call get_wpf_api_reference(component: \"{doc.Component}\", member: \"<name>\") for their numbers and summaries — \"member\" is a case-insensitive substring of the value name."
+                : "Call again with a more specific \"member\" for their numbers and summaries.";
+            text = Render(ApiDetail.CompactAll, $"_ℹ️ Compacted: the full response would be {text.Length} characters, so values are listed by name only. {next}_");
+        }
+        else if (text.Length > MaxApiReferenceChars)
         {
             var fullLength = text.Length;
             var next = string.IsNullOrEmpty(memberFilter)
                 ? $"Call get_wpf_api_reference(component: \"{doc.Component}\", member: \"<name>\") for full details (type, enum values, summary, every overload's signature) — \"member\" is a case-insensitive substring, so one call can cover a family of related members sharing a prefix."
                 : "Call again with a more specific \"member\" for full details (type, enum values, summary, every overload's signature).";
-            string Compacted(ApiDetail detail) =>
-                Render(detail, $"_ℹ️ Compacted: the full response would be {fullLength} characters, so {CompactionSummary(detail)}. {next}_");
-            // Without properties (kind: events/methods) the first level would only cost the members declared on this type their detail.
-            var levels = members.Any(m => m.kind == "property")
-                ? new[] { ApiDetail.CompactEventsMethods, ApiDetail.CompactInherited }
-                : new[] { ApiDetail.CompactInherited };
-            text = levels.Select(Compacted).FirstOrDefault(t => t.Length <= MaxApiReferenceChars) ?? Compacted(ApiDetail.CompactAll);
+            string Compacted((ApiDetail detail, bool protectedByName) level) =>
+                Render(level.detail, $"_ℹ️ Compacted: the full response would be {fullLength} characters, so {CompactionSummary(level.detail, level.protectedByName)}. {next}_", level.protectedByName);
+            // Without properties (kind: events/methods) CompactEventsMethods would only cost the members declared on this type their detail.
+            var details = members.Any(m => m.kind == "property")
+                ? new[] { ApiDetail.Full, ApiDetail.CompactEventsMethods, ApiDetail.CompactInherited }
+                : new[] { ApiDetail.Full, ApiDetail.CompactInherited };
+            bool ShowsProtectedInFull(ApiDetail detail) =>
+                members.Any(m => IsProtectedMember(m.m) && !IsCompact(detail, m.kind, inherited: !string.IsNullOrEmpty(m.m.DeclaredOn)));
+            // Each level as it is (Full has been tried), then with its protected properties and events by name if it shows any in full.
+            var levels = details
+                .SelectMany(detail => new[] { (detail, protectedByName: false), (detail, protectedByName: true) })
+                .Where(level => level.protectedByName ? ShowsProtectedInFull(level.detail) : level.detail != ApiDetail.Full);
+            text = levels.Select(Compacted).FirstOrDefault(t => t.Length <= MaxApiReferenceChars) ?? Compacted((ApiDetail.CompactAll, false));
         }
 
         log.Write("get_wpf_api_reference", input, text, timer);

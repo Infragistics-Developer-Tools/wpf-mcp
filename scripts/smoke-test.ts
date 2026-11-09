@@ -227,6 +227,57 @@ async function main(): Promise<void> {
       r = await call('get_wpf_api_reference', { component: 'TemplateColumn', member: 'ValueConverter' });
       check('a member hidden on the subtype is not inherited from the base',
         !r.isError && textOf(r).includes('No members whose name contains "ValueConverter"'), textOf(r).slice(0, 400));
+      // Nullable<T> properties keep their "?" (CurrentViewDateRange used to read `DateRange`).
+      r = await call('get_wpf_api_reference', { component: 'XamOutlookCalendarView', member: 'CurrentViewDateRange' });
+      check('nullable property types end in "?"', !r.isError && textOf(r).includes('- **CurrentViewDateRange** `DateRange?`:'), textOf(r).slice(-400));
+      // Protected properties and events look public in the XML docs: they get their type and a marker (an agent used
+      // XamGrid.CurrentEditCell from outside the grid and got CS0122). Public ones aren't marked.
+      r = await call('get_wpf_api_reference', { component: 'XamGrid', member: 'Cell' });
+      text = textOf(r);
+      check('protected properties show their type, marked protected',
+        !r.isError && text.includes('- **CurrentEditCell** `Cell` _(protected)_:') && text.includes('- **ActiveCell** `CellBase`:'), text.slice(0, 400));
+      r = await call('get_wpf_api_reference', { component: 'XamDataTree', kind: 'events', member: 'NodeDelet' });
+      check('protected events are marked protected', !r.isError && textOf(r).includes('- **NodeDeleting** _(protected)_:'), textOf(r).slice(-400));
+      // A list of names keeps them apart too, after "protected:".
+      r = await call('get_wpf_api_reference', { component: 'XamDataChart' });
+      check('compacted lists name protected members after "protected:"',
+        !r.isError && /^`CommandCompleted`, [^\n]*; protected: `IsHighlightingInitialized`, /m.test(textOf(r)), textOf(r).slice(0, 300));
+      // A method name goes there when all its overloads are protected (InvalidateScrollPanel, 3 of them); one with a public
+      // overload stays public, its count unchanged (Dispose(): public, Dispose(bool): protected).
+      r = await call('get_wpf_api_reference', { component: 'XamGrid' });
+      const xamGridMethods = /^### Methods\n(.*)$/m.exec(textOf(r))?.[1] ?? '';
+      check('compacted method lists name protected-only methods after "protected:"',
+        !r.isError && /^`OnApplyTemplate`, [^;]*`Dispose` \(2\); protected: `OnCreateAutomationPeer`, [^;]*`InvalidateScrollPanel` \(3\)/.test(xamGridMethods),
+        xamGridMethods.slice(0, 300));
+      // Protected ones go to names before public ones lose detail: in full, their types and markers take this kind "properties"
+      // response to 25.3K, over 25K, and with it every inherited property down to its name (23.0K with them by name).
+      r = await call('get_wpf_api_reference', { component: 'GeographicHighDensityScatterSeries', kind: 'properties' });
+      text = textOf(r);
+      check('protected properties go to names before public ones',
+        !r.isError && text.length <= 25_000 && text.includes('so protected properties and events are listed by name only (public members keep full detail)') &&
+        text.includes('- **DataLegendGroup** `String`:') && text.includes('\n- protected: `CustomClipRect`, '),
+        `${text.length} chars`);
+      // Enums list their values (894 enum pages said "No members defined directly on this type"), with any kind.
+      r = await call('get_wpf_api_reference', { component: 'OutputFormat', kind: 'properties' });
+      text = textOf(r);
+      check('an enum lists its values', !r.isError && text.includes('### Values\n- **XPS** = 0: Exports to XPS format') && !text.includes('No properties members'), text.slice(-400));
+      r = await call('get_wpf_api_reference', { component: 'ValueConstraintFlags' });
+      text = textOf(r);
+      check('a [Flags] enum says its values combine',
+        !r.isError && text.includes('_[Flags] enum: values combine — `ValueConstraintFlags.Enumeration | ValueConstraintFlags.FixedValue` in C#') && text.includes('- **All** = 2147483647:'),
+        text.slice(-600));
+      // Without two single-bit values of its own (None, Office2007UI, All) there is no example, not a made-up `A | B`.
+      r = await call('get_wpf_api_reference', { component: 'LicenseOptions' });
+      text = textOf(r);
+      check('a [Flags] enum with one single-bit value has no placeholder example',
+        !r.isError && text.includes('_[Flags] enum: values combine with `|` in C#, comma-separated in a XAML attribute._') && !/LicenseOptions\.\w+ \| /.test(text),
+        text.slice(-400));
+      // An [Obsolete] value stays, with its replacement; `member` filters values.
+      r = await call('get_wpf_api_reference', { component: 'MapFillMode', member: 'chloropleth' });
+      text = textOf(r);
+      check('an obsolete enum value names its replacement',
+        !r.isError && text.includes('_Showing 1 value whose name contains "chloropleth"._') && text.includes('This is a synonym for Choropleth. ⚠ OBSOLETE: Please use Choropleth instead.'),
+        text.slice(-400));
     }
     r = await call('get_wpf_api_reference', { component: 'xamdatagrid', kind: 'events' });
     check('case-insensitive lookup + kind filter', !r.isError && textOf(r).includes('# XamDataGrid'));
@@ -279,6 +330,38 @@ async function main(): Promise<void> {
       check('control filter finds a family-tagged control', !r.isError && textOf(r).includes('**Controls:** xamInputs'), textOf(r).slice(0, 300));
       r = await call('search_wpf_docs', { control: 'XamDataGrid', query: 'field layout', limit: 10 });
       check('XamDataGrid also finds its xamDataPresenter topics', !r.isError && textOf(r).includes('**Controls:** xamDataPresenter'), textOf(r).slice(0, 300));
+      // Topics without a metadata name are kept by their title, which the sources' byte-order mark used to hide: all
+      // of shape-chart and most of financial-chart were missing. Those that name no control get their folder's.
+      r = await call('search_wpf_docs', { control: 'XamFinancialChart', limit: 10 });
+      check('XamFinancialChart finds its getting-started topic', !r.isError && textOf(r).includes('`financial-chart-gettingstarted`'), textOf(r).slice(0, 300));
+      // A folder alias ("financial-chart") stands for the folder's control: 10 of those 13 topics ranked 23rd to 32nd,
+      // below the ones that name no control (the other 3: 4th, 5th, 10th). An unresolved {Placeholder} (a typo in the
+      // source) names no control.
+      r = await call('search_wpf_docs', { control: 'XamFinancialChart', limit: 15 });
+      text = textOf(r);
+      check('topics naming the folder alias rank with their siblings',
+        !r.isError && text.includes('`financial-chart-chart-tooltips`') && !text.includes('**Controls:** financial-chart'), text.slice(0, 300));
+      r = await call('search_wpf_docs', { control: 'XamDataPieChart', limit: 10 });
+      check('a topic naming an unresolved placeholder gets its folder\'s control',
+        !r.isError && /`data-pie-chart-data-binding`\n- \*\*Matched on:\*\*[^\n]*\n- \*\*Controls:\*\* XamDataPieChart\n/.test(textOf(r)), textOf(r).slice(0, 300));
+      r = await call('search_wpf_docs', { control: 'XamShapeChart', limit: 15 });
+      const shapeSlugs = [...textOf(r).matchAll(/\*\*Topic slug:\*\* `([^`]+)`/g)].map(m => m[1]);
+      check('XamShapeChart topics rank above release notes that mention it', shapeSlugs.length === 15 && shapeSlugs.every(s => s.startsWith('shapechart-')), shapeSlugs.join(', '));
+      // docs-common's scheduler folder is the Xamarin XamScheduler, not part of the WPF docs; as XamScheduler topics they matched
+      // "xamSchedule" by substring (8 of the top 10 for this query). WPF's XamSchedule family is in docs-wpf.
+      r = await call('search_wpf_docs', { query: 'xamSchedule appointments', limit: 10 });
+      text = textOf(r);
+      check('"xamSchedule" finds the XamSchedule topics, not the Xamarin scheduler ones',
+        !r.isError && text.includes('`xamschedule-using-activities-appointments`') && !text.includes('**Topic slug:** `scheduler'), text.slice(0, 300));
+      r = await call('search_wpf_docs', { control: 'xamSchedule', limit: 50 });
+      check('control "xamSchedule" lists no Xamarin scheduler topics',
+        !r.isError && textOf(r).includes('`xamschedule-getting-started`') && !textOf(r).includes('**Topic slug:** `scheduler'), textOf(r).slice(0, 300));
+      // ifdef::XAML[] is WPF content too (build flags are matched case-insensitively).
+      r = await call('get_wpf_doc', { topic: 'shapechart-series-requirements' });
+      check('recovered topic opens, its ifdef::XAML[] note kept', !r.isError && textOf(r).includes('Points column must be a list of lists'), textOf(r).slice(0, 300));
+      // A topic with no `= Title` takes its one top-level `== ` heading.
+      r = await call('get_wpf_doc', { topic: 'nuget-packages' });
+      check('topic titled with == keeps its title', !r.isError && textOf(r).startsWith('## Infragistics NuGet Packages\n'), textOf(r).slice(0, 200));
       // Whole topics up to ~24K characters (this one, 22K, used to be cut at 6,000), with their code fenced.
       r = await call('get_wpf_doc', { topic: 'implementing-undo-redo-crud-operations-in-xamgrid-control' });
       text = textOf(r);

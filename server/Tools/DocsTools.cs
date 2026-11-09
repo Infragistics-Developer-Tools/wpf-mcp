@@ -159,8 +159,9 @@ public sealed class DocsTools(DataStore store, ToolLog log)
 
     // ── get_wpf_doc ──────────────────────────────────────────────────────────
 
-    // Topics up to this size come back whole (2,283 of 2,307 on 26.1.21). The rest, up to 50K, come in pages split at
-    // their section headings, like large theme files; they used to be cut at 6,000 characters, code samples included.
+    // Topics up to this size come back whole (2,350 of 2,376 on 26.1.21). The rest come in pages split at their section
+    // headings, like large theme files: up to 9 (resources-financialdata, 192K; the next longest is 50K). They used to be
+    // cut at 6,000 characters, code samples included.
     private const int MaxDocChars = 24000;
     // Body text per page; with the response's header this stays under the 25K get_wpf_api_reference keeps to as well.
     private const int DocPageChars = 23000;
