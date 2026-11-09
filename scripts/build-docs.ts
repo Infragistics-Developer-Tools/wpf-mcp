@@ -14,7 +14,7 @@
  */
 
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, rmSync, statSync } from 'fs';
-import { join, dirname, basename } from 'path';
+import { join, dirname, basename, resolve, relative } from 'path';
 import { fileURLToPath } from 'url';
 import { ensureSubmodules } from './ensure-submodules.js';
 import { assertBuildStep } from './build-guard.js';
@@ -26,6 +26,7 @@ const ROOT            = join(__dirname, '..');
 const DOCS_WPF_DIR    = join(ROOT, 'docs', 'docs-wpf',    'topics', 'en');
 const DOCS_COMMON_DIR = join(ROOT, 'docs', 'docs-common', 'topics', 'en');
 const DOCS_CONFIG_FILE = join(ROOT, 'docs', 'docs-common', 'DocsConfig.xml');
+const DOCS_DIR        = join(ROOT, 'docs');
 const OUT_DIR         = join(ROOT, 'src', 'data', 'docs');
 const INDEX_FILE      = join(ROOT, 'src', 'data', 'docs-index.json');
 
@@ -315,8 +316,6 @@ function stripProse(raw: string): string {
     .replace(/^\/\/ .+$/gm, '')
     // image:: macros
     .replace(/image::[^\[]*\[[^\]]*\]/g, '')
-    // include:: directives
-    .replace(/^include::.+$/gm, '')
 
     // ── Strip inline markup, keep visible text ───────────────────────────────
     // link:url[text] / xref:url[text] / link:{var}url[text] → text
@@ -350,28 +349,66 @@ function stripProse(raw: string): string {
     .trim();
 }
 
+// ── include:: directives ──────────────────────────────────────────────────────
+
+// All but a handful of the sources start with a UTF-8 byte-order mark, which readFileSync keeps: it hid the `= Title`
+// on line 1, and with it 86 topics that have no metadata name (all 18 shape-chart ones, for instance).
+function readSource(filePath: string): string {
+  return readFileSync(filePath, 'utf-8').replace(/^\uFEFF/, '');
+}
+
+const INCLUDE_LINE = /^include::([^\[\n]+)\[([^\]\n]*)\][ \t]*\r?$/;
+// The files include:: lines pasted, and the include:: lines that pasted nothing (file:line → why), checked at the end.
+const includedFiles = new Set<string>();
+const brokenIncludes = new Map<string, string>();
+const unsupportedIncludes = new Set<string>();
+
+/**
+ * Paste each `include::file.adoc[]` line's file in its place, as Asciidoctor does when the docs site is built: the path
+ * is relative to the file the line is in, and the pasted file's own include:: lines are resolved in turn. 67 docs-wpf
+ * topics are written this way, and the line used to be deleted: xamdatagrid-crossfieldrecordfiltering is a title,
+ * Purpose and Required Background, then include::shared-crossfieldrecordfiltering.adoc[] with the whole explanation
+ * and its samples. Every include in the sources has empty brackets; an attribute (leveloffset, tag, lines…) would
+ * change what is pasted, so one is refused at the end rather than ignored. A missing file or a cycle pastes nothing.
+ */
+function expandIncludes(raw: string, filePath: string, stack: string[] = [filePath]): string {
+  return raw.split('\n').map((line, i) => {
+    const m = INCLUDE_LINE.exec(line);
+    if (!m) return line;
+    const where = `${relative(DOCS_DIR, filePath).replace(/\\/g, '/')}:${i + 1}`;
+    if (m[2].trim()) { unsupportedIncludes.add(`${where} ${line.trim()}`); return ''; }
+    const target = resolve(dirname(filePath), m[1].trim());
+    if (stack.includes(target)) { brokenIncludes.set(where, `include::${m[1]}[] is a cycle: that file is being pasted already`); return ''; }
+    if (!existsSync(target)) { brokenIncludes.set(where, `include::${m[1]}[]: no such file`); return ''; }
+    includedFiles.add(target);
+    return expandIncludes(readSource(target), target, [...stack, target]);
+  }).join('\n');
+}
+
 // ── File processor ────────────────────────────────────────────────────────────
 
-function processFile({ path: filePath, source, folder }: FileSource): DocEntry | null {
-  let raw: string;
+/** `aliasOf`: the one file this file includes, when it has no text of its own (see the alias check in Main). */
+interface ProcessedTopic { entry: DocEntry; aliasOf?: string }
+
+function processFile({ path: filePath, source, folder }: FileSource): ProcessedTopic | null {
+  let own: string;
   try {
-    // All but a handful of the sources start with a UTF-8 byte-order mark, which readFileSync keeps: it hid the
-    // `= Title` on line 1, and with it 86 topics that have no metadata name (all 18 shape-chart ones, for instance).
-    raw = readFileSync(filePath, 'utf-8').replace(/^\uFEFF/, '');
+    own = readSource(filePath);
   } catch {
     return null;
   }
 
   // Resolve {PlaceholderName} tokens (shared docs-common topics) into real WPF
   // control names before any parsing, so metadata/title/body all see the
-  // resolved text (e.g. "XamCategoryChart" instead of "{CategoryChartName}").
-  raw = resolveVars(raw);
+  // resolved text (e.g. "XamCategoryChart" instead of "{CategoryChartName}"). The metadata is the file's own, read
+  // before include:: pastes other files in: most of those have a metadata block too, only a comment where it's pasted.
+  const meta = parseMetadata(resolveVars(own));
+  let raw = resolveVars(expandIncludes(own, filePath));
   const conditional = applyConditionals(raw);
   raw = resolvePicks(conditional.text);
   droppedChars += conditional.dropped;
   if (conditional.dropped > 0) topicsTrimmed++;
 
-  const meta  = parseMetadata(raw);
   if (isForOtherPlatforms(meta)) { otherPlatformTopics++; return null; }
   const title = extractTitle(raw);
 
@@ -380,7 +417,7 @@ function processFile({ path: filePath, source, folder }: FileSource): DocEntry |
   // but only when the file has a real heading — untitled files are fragments and data
   // dumps — and never for a localized copy, whose slug would duplicate the English topic.
   const fileSlug = basename(filePath, '.adoc');
-  if (!meta?.name && (!title || LOCALIZED_FILE.test(fileSlug))) { if (!title) untitled++; return null; }
+  if (!meta?.name && (!title || LOCALIZED_FILE.test(fileSlug))) { if (!title) untitled.push(filePath); return null; }
 
   const slug         = meta?.name?.trim() || fileSlug;
   // A docs-common topic that names no control gets its folder's. An unresolved {Placeholder} names none
@@ -410,10 +447,17 @@ function processFile({ path: filePath, source, folder }: FileSource): DocEntry |
     mentions[name] = (mentions[name] ?? 0) + 1;
   }
 
+  // A file whose only line of its own is one include:: (xamdatagrid-external-filtering-copy) is the included file again.
+  const [onlyLine, ...moreLines] = own.replace(/\/\/\/\/[\s\S]*?\/\/\/\//g, '').split('\n').filter(l => l.trim());
+  const included = onlyLine && !moreLines.length ? INCLUDE_LINE.exec(onlyLine)?.[1] : undefined;
+
   return {
-    slug, title, controlNames, tags, source, summary,
-    ...(Object.keys(mentions).length ? { mentions } : {}),
-    body, xamlSnippets,
+    entry: {
+      slug, title, controlNames, tags, source, summary,
+      ...(Object.keys(mentions).length ? { mentions } : {}),
+      body, xamlSnippets,
+    },
+    ...(included ? { aliasOf: resolve(dirname(filePath), included.trim()) } : {}),
   };
 }
 
@@ -478,28 +522,68 @@ console.log(`Discovered ${files.length} .adoc files  (wpf + common)`);
 
 const index: DocIndexEntry[] = [];
 let skipped = 0;
-let droppedChars = 0, topicsTrimmed = 0, otherPlatformTopics = 0, untitled = 0;
-const slugSeen = new Set<string>();
+let droppedChars = 0, topicsTrimmed = 0, otherPlatformTopics = 0;
+const untitled: string[] = [];
 // docs-common folder → its .adoc files and the topics written from them
 const folderCounts = new Map<string, { files: number; topics: number }>();
 for (const { folder } of files) {
   if (folder) folderCounts.set(folder, { files: (folderCounts.get(folder)?.files ?? 0) + 1, topics: 0 });
 }
 
+let topics: (ProcessedTopic & { file: FileSource })[] = [];
 for (const file of files) {
-  const entry = processFile(file);
+  const topic = processFile(file);
+  if (topic) topics.push({ ...topic, file }); else skipped++;
+}
 
-  if (!entry) { skipped++; continue; }
+// A file that is only an include:: of another topic is that topic's second place in the table of contents (the 4
+// xamdatagrid-external-*-copy files, xamdatapresenter-conftreeview-expind for xamtreegrid-conf-expansion-indicators):
+// written too, it would be the same text under a second slug, listed twice in every search that finds it.
+const topicFiles = new Set(topics.map(t => t.file.path));
+const aliases = topics.filter(t => t.aliasOf && topicFiles.has(t.aliasOf));
+topics = topics.filter(t => !aliases.includes(t));
+skipped += aliases.length;
 
-  // Deduplicate: docs-wpf takes precedence over docs-common for the same slug
-  if (slugSeen.has(entry.slug)) {
-    if (file.source === 'common') { skipped++; continue; }
-    // Replace existing common entry with wpf entry (update index + overwrite file)
-    const idx = index.findIndex(e => e.slug === entry.slug);
-    if (idx !== -1) index.splice(idx, 1);
+const fileName = (t: { file: FileSource }) => basename(t.file.path, '.adoc');
+const where = (t: { file: FileSource }) => relative(DOCS_DIR, t.file.path).replace(/\\/g, '/');
+
+// The docs site's address for a page is its file name, and where docs-wpf and docs-common both have a file, WPF's
+// docs site serves the docs-common one: bulletgraph.html is the shared xamBulletGraph overview, not docs-wpf's
+// bulletgraph.adoc (only its title, as are 8 of these 10), and resources-sample-bubble-data.html the shared
+// BubbleDataSource the chart topics bind to, not docs-wpf's XML. docs-wpf's used to win.
+const sharedFiles = new Set(topics.filter(t => t.file.source === 'common').map(t => fileName(t).toLowerCase()));
+const shadowed = topics.filter(t => t.file.source === 'wpf' && sharedFiles.has(fileName(t).toLowerCase()));
+topics = topics.filter(t => !shadowed.includes(t));
+skipped += shadowed.length;
+
+// A topic's slug is its metadata name, and a few files claim another's: six data-pie-chart files, its overview among
+// them, are named "piechart-selection" (the pie chart's selection topic), whats-new-in-2017-volume-2
+// "whats-new-in-2017-volume-1". The file named after it keeps the name and the others take their own file names. The
+// first file read used to keep it (in docs-wpf, the last) and the rest were dropped unseen: piechart-selection was the
+// data pie chart's Animation.
+const claims = new Map<string, typeof topics>();
+for (const t of topics) claims.set(t.entry.slug.toLowerCase(), [...(claims.get(t.entry.slug.toLowerCase()) ?? []), t]);
+const renamed: string[] = [];
+for (const [name, group] of claims) {
+  if (group.length < 2) continue;
+  for (const t of group.filter(t => fileName(t).toLowerCase() !== name)) {
+    renamed.push(`${t.entry.slug} → ${fileName(t)} (${where(t)})`);
+    t.entry.slug = fileName(t);
   }
-  slugSeen.add(entry.slug);
+}
 
+// Two topics left with one slug (two docs-common folders with a file of that name, or a file name that is another
+// topic's metadata name) would overwrite each other's .json file; slugs differing only in letter case collide on a
+// case-insensitive filesystem the same way.
+const bySlug = new Map<string, string[]>();
+for (const t of topics) bySlug.set(t.entry.slug.toLowerCase(), [...(bySlug.get(t.entry.slug.toLowerCase()) ?? []), where(t)]);
+const collisions = [...bySlug].filter(([, paths]) => paths.length > 1);
+assertBuildStep(collisions.length === 0,
+  `Topics that would share a slug: ${collisions.map(([slug, paths]) => `${slug} (${paths.join(', ')})`).join('; ')}. ` +
+  `A file named after a metadata name keeps it and the others take their own file names, so these need a new rule.`
+);
+
+for (const { entry, file } of topics) {
   const { body, xamlSnippets, ...indexEntry } = entry;
 
   // Write full content file
@@ -524,24 +608,38 @@ assertBuildStep(index.length > 0,
   `Needs a code fix in build-docs.ts, not a submodule re-init.`
 );
 
-assertBuildStep(
-  new Set(index.map(e => e.slug.toLowerCase())).size === index.length,
-  `Two topics have slugs differing only in letter case. Their .json files collide on a ` +
-  `case-insensitive filesystem, so one would silently overwrite the other.`
+// An include:: that pasted nothing: a missing file is a broken link in the sources (logged for the docs team), but more
+// than a few means the paths no longer resolve and topics like xamdatagrid-crossfieldrecordfiltering are stubs again.
+for (const [line, why] of brokenIncludes) console.warn(`⚠  ${line}: ${why}`);
+assertBuildStep(brokenIncludes.size <= 3,
+  `${brokenIncludes.size} include:: lines pasted nothing (${[...brokenIncludes.keys()].slice(0, 3).join(', ')}): ` +
+  `expandIncludes no longer finds the files they name, so the topics written with them lose that text.`
+);
+assertBuildStep(unsupportedIncludes.size === 0,
+  `include:: lines with attributes, which expandIncludes doesn't apply: ${[...unsupportedIncludes].join('; ')}. ` +
+  `Each changes what is pasted (leveloffset the heading levels, tag/tags/lines a part of the file): implement it.`
+);
+// An include:: line left in a written topic means INCLUDE_LINE no longer matches the sources' form.
+const unexpanded = topics.filter(t => /^include::/m.test(t.entry.body)).map(t => t.entry.slug);
+assertBuildStep(unexpanded.length === 0,
+  `${unexpanded.length} topics still contain include:: lines (e.g. ${unexpanded.slice(0, 3).join(', ')}): ` +
+  `INCLUDE_LINE no longer matches their form, so the text they include is missing.`
 );
 
 // A topic without a metadata name is kept only with a title. The byte-order mark nearly every source starts with once
 // hid the title of 86 of them, and they were left out unseen: all of shape-chart, 19 of 32 financial-chart topics, the
-// changelog. What is left out now is two include:: fragments (shared-*) that open with a section, not a title.
-assertBuildStep(untitled <= 5,
-  `${untitled} topics that have no metadata name were left out because extractTitle found no title in them — the ` +
+// changelog. include:: fragments (shared-crossfieldrecordfiltering opens with a section, not a title) are left out
+// too: their text is in the topics that include them.
+const fragments = untitled.filter(f => includedFiles.has(f));
+const untitledTopics = untitled.filter(f => !includedFiles.has(f));
+assertBuildStep(untitledTopics.length <= 5,
+  `${untitledTopics.length} topics that have no metadata name were left out because extractTitle found no title in them — the ` +
   `title detection no longer matches the sources (a byte-order mark or a new heading form), so whole families of ` +
   `topics (shape-chart, financial-chart, the release notes) would be missing from search_wpf_docs.`
 );
 
 // Every docs-common folder keeps a fair share of its topics: a folder renamed upstream would drop out of COMMON_FOLDERS
-// unseen, and the lost titles above had taken shape-chart to 0 of 18 topics. (Duplicate metadata names already cost
-// data-pie-chart half of its 10: five are named "piechart-selection".)
+// unseen, and the lost titles above had taken shape-chart to 0 of 18 topics.
 const thinFolders = !existsSync(DOCS_COMMON_DIR) ? [] : [...COMMON_FOLDERS.keys()]
   .map(f => ({ f, ...(folderCounts.get(f) ?? { files: 0, topics: 0 }) }))
   .filter(c => c.topics === 0 || c.topics < c.files / 3);
@@ -569,6 +667,13 @@ console.log(`  Topics written : ${index.length}`);
 console.log(`  Code blocks    : ${fenced}`);
 console.log(`  Other platforms: ${otherPlatformTopics} topics built only for them left out; ${topicsTrimmed} topics lost ` +
   `${droppedChars} chars of non-WPF ifdef:: blocks (WPF flags: ${[...WPF_FLAGS].join(', ')})`);
-console.log(`  Skipped        : ${skipped}  (other platforms, ${untitled} untitled without a metadata name, duplicate slugs, empty)`);
+console.log(`  Includes       : ${includedFiles.size} files pasted by include::, ${fragments.length} of them fragments that ` +
+  `aren't topics; ${aliases.length} files that only include another topic left out (${aliases.map(fileName).join(', ')})`);
+console.log(`  Shared names   : ${renamed.length} topics took their file name as slug, the name being another file's:`);
+for (const r of renamed) console.log(`                   ${r}`);
+console.log(`  Same file      : ${shadowed.length} docs-wpf files left out for the docs-common file of the same name: ` +
+  shadowed.map(t => `${where(t)} (${t.entry.slug})`).join(', '));
+console.log(`  Skipped        : ${skipped}  (other platforms, ${untitled.length} untitled without a metadata name, ` +
+  `include-only files, docs-wpf files a docs-common one replaces, empty)`);
 console.log(`  Index          : ${INDEX_FILE}`);
 console.log(`  Full content   : ${OUT_DIR}/  (${index.length} files)`);

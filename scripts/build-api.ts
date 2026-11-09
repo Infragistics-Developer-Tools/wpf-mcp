@@ -2,7 +2,8 @@
 /**
  * build-api.ts
  *
- * Generates src/data/api/{TypeName}.json  (one file per public Infragistics type)
+ * Generates src/data/api/{TypeName}.json  (one file per public Infragistics type short name),
+ * src/data/api/alternates/{Full.Name}.json (the other types of a shared short name),
  * and regenerates src/data/namespaces.json (Xam* controls only, used by list_wpf_components)
  *
  * Prerequisites: nuget/packages/ must be populated first.
@@ -19,6 +20,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT          = join(__dirname, '..');
 const PACKAGES_DIR  = join(ROOT, 'nuget', 'packages');
 const API_OUT_DIR   = join(ROOT, 'src', 'data', 'api');
+// Pages of the types that lost their short name to another type, named after their lookup (full name). A
+// subfolder, so a short-name lookup's case-insensitive scan of api/ never sees them.
+const ALT_OUT_DIR   = join(API_OUT_DIR, 'alternates');
 const NS_OUT_FILE   = join(ROOT, 'src', 'data', 'namespaces.json');
 
 // ── Type name exclusion list ──────────────────────────────────────────────────
@@ -223,10 +227,26 @@ export interface ObsoleteMember {
   declaredOn?: string;
 }
 
+/** Another type with the page's short name, or the same class listed under another package (sameType). */
 export interface AlternateType {
   fullName: string;
   nugetPackage: string;
+  /** Properties + events + methods, inherited ones included: counted as on the type's own page. */
   memberCount: number;
+  assembly: string;
+  /** The same class as the page's (same assembly and full name), whose XML docs another package ships too: no page of its own. */
+  sameType?: boolean;
+  /** What get_wpf_api_reference takes to open its page: the full name, plus ", Assembly" when another type of the name has that full name too. */
+  lookup?: string;
+  /** The type get_wpf_api_reference opens for the short name (listed on the other types' pages). */
+  isDefault?: boolean;
+  xamlNamespace?: string;
+  defaultPrefix?: string;
+  /** The first sentence of its summary. */
+  summary?: string;
+  /** Enums: how many values, and the first few names. */
+  valueCount?: number;
+  valueNames?: string[];
 }
 
 export interface ApiEntry {
@@ -244,6 +264,8 @@ export interface ApiEntry {
   baseType?: string;
   /** Set only when other Infragistics types share this short name. */
   alternates?: AlternateType[];
+  /** Set only on the page of a type that lost its short name (api/alternates/): what get_wpf_api_reference takes to open it. */
+  lookup?: string;
   properties: ApiMemberEntry[];
   events:     ApiMemberEntry[];
   methods:    ApiMemberEntry[];
@@ -267,6 +289,8 @@ export interface RegistryEntry {
   nugetPackage: string;
   assembly: string;
   description: string;
+  /** Other types of this name, opened by full name (not the same class under another package). */
+  alternates?: AlternateType[];
 }
 
 interface TypeInfoEntry {
@@ -484,9 +508,9 @@ async function generate() {
   // same path concurrently and interleave into invalid JSON. loadApiDoc() also resolves
   // names case-insensitively, so a case-variant twin is unreachable regardless.
   const keyByLower = new Map<string, string>();
-  const memberCounts = new Map<string, number>();
   const contestCounts = new Map<string, number>();
-  const alternates = new Map<string, AlternateType[]>();
+  // The types that lost a short-name contest, by lowercased name: each gets a page of its own under api/alternates/.
+  const losers = new Map<string, ApiEntry[]>();
 
   for (let fileIdx = 0; fileIdx < sources.length; fileIdx++) {
     const { xmlPath, packageId } = sources[fileIdx];
@@ -677,46 +701,34 @@ async function generate() {
       const typeFlags = memberMeta[`${assemblyName}|T:${type.fullName}`];
       if (typeFlags?.hidden && typeFlags.obsolete === undefined) { hiddenTypes.push(type.fullName); continue; }
 
-      const memberCount = entry.properties.length + entry.events.length + entry.methods.length;
       // Short-name contests are still decided by the count from before internal / private (and obsolete / hidden)
       // members were left out: with the new count, Cell, FieldChooser and RecordFilterCollection switched from the
       // DataPresenter types to the XamGrid / XamPivotGrid / DataManager ones.
       const documented = (ms: RawMember[]) => ms.filter(m => m.summary.toLowerCase() !== 'internal').length;
       const contestCount = documented(bucket.props) + fields.length + documented(bucket.events) + documented(bucket.methods);
-      const candidate: AlternateType = {
-        fullName: type.fullName,
-        nugetPackage: packageId,
-        memberCount,
-      };
       const lower = typeName.toLowerCase();
       const incumbentKey = keyByLower.get(lower);
 
       if (incumbentKey === undefined) {
         entries.set(typeName, entry);
         keyByLower.set(lower, typeName);
-        memberCounts.set(lower, memberCount);
         contestCounts.set(lower, contestCount);
       } else {
         // Two different types share this short name. Discovery order is just
         // package-alphabetical, which surfaces stub types over the real control
         // (e.g. a 20-member XamComboEditor beating the 125-member one), so keep
-        // whichever documents more members and record the other as an alternate.
+        // whichever documents more members and page the other as an alternate.
         const incumbent = entries.get(incumbentKey)!;
-        if (!alternates.has(lower)) alternates.set(lower, []);
+        if (!losers.has(lower)) losers.set(lower, []);
 
         if (contestCount > contestCounts.get(lower)!) {
-          alternates.get(lower)!.push({
-            fullName: `${incumbent.dotnetNamespace}.${incumbent.component}`,
-            nugetPackage: incumbent.nugetPackage,
-            memberCount: memberCounts.get(lower)!,
-          });
+          losers.get(lower)!.push(incumbent);
           entries.delete(incumbentKey);
           entries.set(typeName, entry);
           keyByLower.set(lower, typeName);
-          memberCounts.set(lower, memberCount);
           contestCounts.set(lower, contestCount);
         } else {
-          alternates.get(lower)!.push(candidate);
+          losers.get(lower)!.push(entry);
         }
       }
     }    console.log(`${Date.now() - t0}ms  (${members.length} members)`);
@@ -742,14 +754,71 @@ async function generate() {
   console.log(`XAML namespaces: ${xamlFallbacks.length} type(s) fell back to clr-namespace syntax ` +
     `(${genericFallbacks} generic, ${xamlFallbacks.length - genericFallbacks} other${xamlFallbacks.length > genericFallbacks ? `: ${xamlFallbacks.filter(n => !n.includes('`')).slice(0, 8).join(', ')}` : ''})`);
 
-  for (const [lower, alts] of alternates) {
-    const winner = entries.get(keyByLower.get(lower)!);
-    if (winner) winner.alternates = alts.sort((a, b) => b.memberCount - a.memberCount);
-  }
-
   // Enrich in-memory, then write everything at once
   console.log(`Enriching inheritance...`);
   const enriched = enrichWithInheritance(entries, baseTypes, allTypes);
+
+  // A type that lost its short name gets a page of its own, built the same way (inherited members included), which
+  // get_wpf_api_reference opens by full name; each type of a shared name lists the others with that lookup. Except the
+  // same class listed twice (same assembly and full name: Infragistics.WPF.Spreadsheet.Charts.Trial ships the XML docs
+  // of XamSpreadsheet's assembly beside its own ChartAdapter DLL), which its page only notes.
+  const fullName = (e: ApiEntry) => `${e.dotnetNamespace}.${e.component}`;
+  const groups: { types: ApiEntry[]; twins: Map<ApiEntry, ApiEntry[]> }[] = [];
+  const alternatePages = new Map<string, ApiEntry>();   // by "Assembly|Namespace.Type"
+  let sameTypeNotes = 0;
+  for (const [lower, lost] of losers) {
+    const types = [entries.get(keyByLower.get(lower)!)!];   // the winner first
+    const twins = new Map<ApiEntry, ApiEntry[]>();
+    for (const e of lost) {
+      const twin = types.find(t => t.assembly === e.assembly && fullName(t) === fullName(e));
+      if (twin) { twins.set(twin, [...(twins.get(twin) ?? []), e]); sameTypeNotes++; }
+      else { types.push(e); alternatePages.set(`${e.assembly}|${fullName(e)}`, e); }
+    }
+    groups.push({ types, twins });
+  }
+  // After the pages': a page's inherited members come from its bases' own (declaredOn-less) members either way.
+  const enrichedAlternates = enrichWithInheritance(alternatePages, baseTypes, allTypes);
+
+  const memberCount = (e: ApiEntry) => e.properties.length + e.events.length + e.methods.length;
+  const firstSentence = (s: string) => {
+    const sentence = /^.*?[.!?](?=\s|$)/.exec(s)?.[0] ?? s;
+    return sentence.length > 200 ? `${sentence.slice(0, 199)}…` : sentence;
+  };
+  for (const { types, twins } of groups) {
+    // The full name, plus the assembly when two types of the name share that too (Caret is in both the XamRichTextEditor
+    // and the XamSyntaxEditor assembly). A bare full name opens the first type that has it, the winner before the rest.
+    const lookups = new Map(types.map(t => [t,
+      types.filter(o => fullName(o).toLowerCase() === fullName(t).toLowerCase()).length > 1 ? `${fullName(t)}, ${t.assembly}` : fullName(t)]));
+    const describe = (t: ApiEntry): AlternateType => ({
+      fullName: fullName(t), nugetPackage: t.nugetPackage, memberCount: memberCount(t), assembly: t.assembly,
+      lookup: lookups.get(t)!, ...(t === types[0] ? { isDefault: true } : {}),
+      xamlNamespace: t.xamlNamespace, defaultPrefix: t.defaultPrefix,
+      ...(t.summary ? { summary: firstSentence(t.summary) } : {}),
+      ...(t.values ? { valueCount: t.values.length, valueNames: t.values.slice(0, 8).map(v => v.name) } : {}),
+    });
+    for (const t of types) {
+      // The default type first (on the others' pages), then by member count, as before.
+      const others = types.filter(o => o !== t).map(describe)
+        .sort((a, b) => Number(!!b.isDefault) - Number(!!a.isDefault) || b.memberCount - a.memberCount);
+      const sameType = (twins.get(t) ?? []).map(d => ({
+        fullName: fullName(d), nugetPackage: d.nugetPackage, memberCount: memberCount(d), assembly: d.assembly, sameType: true,
+      }));
+      if (others.length + sameType.length) t.alternates = [...others, ...sameType];
+      if (t !== types[0]) t.lookup = lookups.get(t);
+    }
+  }
+  const altLookups = [...alternatePages.values()].map(e => e.lookup!);
+  assertBuildStep(new Set(altLookups.map(l => l.toLowerCase())).size === altLookups.length,
+    `Two alternate pages have lookups that differ only in letter case, so their api/alternates/ files would collide on a ` +
+    `case-insensitive filesystem — the lookups in generate() must stay unique case-insensitively.`
+  );
+  const tooLong = altLookups.filter(l => l.length > 128);
+  assertBuildStep(tooLong.length === 0,
+    `${tooLong.length} alternate lookup(s) are longer than the 128 characters get_wpf_api_reference's "component" takes ` +
+    `(e.g. ${tooLong.slice(0, 2).join('; ')}): raise that limit in server/Tools/ComponentTools.cs.`
+  );
+  console.log(`Alternates: ${alternatePages.size} type(s) that lost their short name get a page in api/alternates/ ` +
+    `(${enrichedAlternates} with inherited members); ${sameTypeNotes} listed twice (same assembly and full name) are noted instead.`);
 
   const enumPages = [...entries.values()].filter(e => e.values);
   console.log(`Enums: ${enumPages.length} pages (${enumPages.filter(e => e.isFlags).length} [Flags]) list ` +
@@ -761,22 +830,27 @@ async function generate() {
     `longer match the XML docs' type names. Every enum page would say it has no members.`
   );
 
-  const escaped = [...entries.values()].filter(e => /\\\\u00[0-9A-Fa-f]{2}/.test(JSON.stringify(e)));
+  const escaped = [...entries.values(), ...alternatePages.values()].filter(e => /\\\\u00[0-9A-Fa-f]{2}/.test(JSON.stringify(e)));
   assertBuildStep(escaped.length === 0,
     `${escaped.length} API entr${escaped.length === 1 ? 'y' : 'ies'} (e.g. ${escaped.slice(0, 3).map(e => e.component).join(', ')}) contain ` +
     `JSON escapes such as \\u003C as literal text — a type-info.json string was used without decode(), so agents would ` +
     `read "Action\\u003CToolCommand\\u003E" instead of "Action<ToolCommand>".`
   );
 
-  console.log(`Writing ${entries.size} API files...`);
-  await Promise.all(
-    [...entries.entries()].map(([typeName, entry]) =>
+  console.log(`Writing ${entries.size} API files and ${alternatePages.size} alternate pages...`);
+  mkdirSync(ALT_OUT_DIR, { recursive: true });
+  await Promise.all([
+    ...[...entries.entries()].map(([typeName, entry]) =>
       fsPromises.writeFile(join(API_OUT_DIR, `${typeName}.json`), JSON.stringify(entry), 'utf-8')
-    )
-  );
+    ),
+    ...[...alternatePages.values()].map(entry =>
+      fsPromises.writeFile(join(ALT_OUT_DIR, `${entry.lookup}.json`), JSON.stringify(entry), 'utf-8')
+    ),
+  ]);
 
   // Built from the resolved winners, not during discovery, so a type that loses a
-  // short-name collision can't leave a stale registry entry behind.
+  // short-name collision can't leave a stale registry entry behind. It names the
+  // others, though (the newer Infragistics.Controls.Editors.XamComboEditor).
   const registry: RegistryEntry[] = [...entries.values()]
     .filter(e => e.component.startsWith('Xam'))
     .map(e => ({
@@ -787,6 +861,7 @@ async function generate() {
       nugetPackage:    e.nugetPackage,
       assembly:        e.assembly,
       description:     e.summary,
+      ...(e.alternates?.some(a => a.lookup) ? { alternates: e.alternates.filter(a => a.lookup) } : {}),
     }));
 
   assertBuildStep(
@@ -805,8 +880,10 @@ async function generate() {
   registry.sort((a, b) => a.component.localeCompare(b.component));
   writeFileSync(NS_OUT_FILE, JSON.stringify(registry, null, 2), 'utf-8');
 
-  // Search index — lightweight flat array, loaded once at MCP startup
-  const searchIndex = [...entries.values()].map(e => ({
+  // Search index — lightweight flat array, loaded once at MCP startup. The types that lost their short name come last,
+  // so they don't reorder the others' ties, with "f": what opens their page; the type that kept the name has its full
+  // name there too. Only the short name is matched: namespace words ("Editors") would rank every shared name up.
+  const searchIndex = [...entries.values(), ...alternatePages.values()].map(e => ({
     n: e.component,
     s: e.summary,
     a: e.assembly,
@@ -819,6 +896,7 @@ async function generate() {
       ...e.methods.map(x => x.name),
       ...(e.obsolete ?? []).filter(o => o.kind !== 'constructor').map(o => o.name),
     ])],
+    ...(e.lookup ? { f: e.lookup } : e.alternates?.some(a => a.lookup) ? { f: fullName(e) } : {}),
   }));
   writeFileSync(
     join(ROOT, 'src', 'data', 'search-index.json'),
@@ -827,7 +905,7 @@ async function generate() {
   );
 
   console.log(`Done.`);
-  console.log(`  API files:    ${entries.size} → src/data/api/`);
+  console.log(`  API files:    ${entries.size} → src/data/api/, ${alternatePages.size} → src/data/api/alternates/`);
   console.log(`  Enriched:     ${enriched} types with inherited Infragistics properties`);
   console.log(`  Registry:     ${registry.length} Xam* controls → src/data/namespaces.json`);
   console.log(`  Search index: ${searchIndex.length} types → src/data/search-index.json`);

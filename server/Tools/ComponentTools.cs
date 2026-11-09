@@ -79,6 +79,10 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
                 $"- **Assembly:** `{c.Assembly}`",
                 $"- {c.Description}",
             };
+            // Another control of this name (the newer Infragistics.Controls.Editors.XamComboEditor), which only its full name opens.
+            line.AddRange((c.Alternates ?? []).Select(a =>
+                $"- ⚠️ Not the only {c.Component}: `{a.FullName}` is another (NuGet `{a.NugetPackage}`, `xmlns:{a.DefaultPrefix}=\"{a.XamlNamespace}\"`; " +
+                $"get_wpf_api_reference(\"{a.Lookup}\")). The name alone means the one above in get_wpf_api_reference and get_wpf_project_scaffold."));
             if (ThemeLookup.IsThemeable(c.Component, store.ThemeIndex))
                 line.Add($"- 🎨 Ships with named themes — call `setup_wpf_theme(component: \"{c.Component}\")` before writing style/theme overrides.");
             return string.Join('\n', line);
@@ -92,6 +96,21 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
     }
 
     // ── get_wpf_api_reference ────────────────────────────────────────────────
+
+    // A Markdown code span, double-fenced when the text has a backtick of its own (a generic type's "EnumWrapper`1"),
+    // which would otherwise end the span and cut a call in two.
+    private static string Code(string text) => text.Contains('`') ? $"`` {text} ``" : $"`{text}`";
+
+    // One line per other type of the page's short name: the call that opens it, then what tells them apart.
+    private static string FormatAlternate(AlternateType a, string shortName)
+    {
+        var size = a.ValueCount is { } count
+            ? $"{count} values ({string.Join(", ", (a.ValueNames ?? []).Select(v => $"`{v}`"))}{(count > (a.ValueNames?.Length ?? 0) ? ", …" : "")})"
+            : $"{a.MemberCount} members";
+        var xmlns = a.XamlNamespace is { } ns ? $", `xmlns:{a.DefaultPrefix}=\"{ns}\"`" : "";
+        var isDefault = a.IsDefault == true ? $" (what \"{shortName}\" alone returns)" : "";
+        return $"- {Code($"get_wpf_api_reference(\"{a.Lookup}\")")}{isDefault} — {size}, NuGet `{a.NugetPackage}`{xmlns}: {(string.IsNullOrEmpty(a.Summary) ? "—" : a.Summary)}";
+    }
 
     private static string FormatMember(ApiMemberEntry m, bool withParameters)
     {
@@ -227,6 +246,8 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             Any public Infragistics WPF type name — 5,100+ types including controls (e.g. "XamDataGrid"),
                   supporting types (e.g. "FieldLayout", "SummaryDefinition"), enums, strategies, indicators, and more.
                   Case-insensitive. To find a Xam* control name use list_wpf_components. To discover any other type name use search_wpf_api.
+                  Or a full name (Namespace.Type), e.g. "Infragistics.Controls.Editors.XamComboEditor": a name several types share
+                  returns the most fully documented one and lists the others with the full name that opens each.
             """)]
         [MinLength(1), MaxLength(128)]
         string component,
@@ -251,14 +272,21 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
         }
         var memberFilter = member?.Trim();
 
-        var doc = store.LoadApiDoc(component);
+        var doc = store.LoadApiType(component, out var byShortName);
         if (doc is null)
         {
             var known = string.Join(", ", store.Components.Select(c => c.Component));
-            var msg = $"Component \"{component}\" not found. Known Xam* controls: {known}\n\nNote: Supporting types (FieldLayout, SummaryDefinition, etc.) are also available — use the exact type name.";
+            // A full name whose short name has a page: the types of that name, as the page lists them.
+            var msg = byShortName is { } page
+                ? $"Type \"{component}\" not found. The Infragistics type(s) named \"{page.Component}\" — pass one of these exactly:\n" +
+                  string.Join('\n', new[] { $"- {Code($"get_wpf_api_reference(\"{page.DotnetNamespace}.{page.Component}\")")} (what \"{page.Component}\" alone returns) — NuGet `{page.NugetPackage}`" }
+                      .Concat((page.Alternates ?? []).Where(a => a.Lookup is not null).Select(a => $"- {Code($"get_wpf_api_reference(\"{a.Lookup}\")")} — NuGet `{a.NugetPackage}`")))
+                : $"Component \"{component}\" not found. Known Xam* controls: {known}\n\nNote: Supporting types (FieldLayout, SummaryDefinition, etc.) are also available — use the exact type name.";
             log.Write("get_wpf_api_reference", input, msg, timer);
             return ToolResult.Error(msg);
         }
+        // What opens this page again, for the hints below: the short name, or for a type that lost it, its full name.
+        var self = doc.Lookup ?? doc.Component;
 
         var allMembers = (doc.Constructors ?? []).Select(m => (m, kind: "constructor"))
             .Concat(doc.Properties.Select(m => (m, kind: "property")))
@@ -297,17 +325,28 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             summary,
         });
 
-        if (doc.Alternates is { Length: > 0 })
+        // The other types of this short name (an agent on XamDataGrid got XamGrid's SelectionType), each with the call that
+        // opens it — its full name — and enough to choose: size, package, xmlns, what it is.
+        var others = (doc.Alternates ?? []).Where(a => a.SameType != true).ToArray();
+        if (others.Length > 0)
         {
             var memberCount = doc.Properties.Length + doc.Events.Length + doc.Methods.Length;
             // Member counts say nothing about enums, which have values instead (every one would read "0 members").
             var count = doc.Values is { } enumValues ? $"{enumValues.Length} values" : $"{memberCount} members";
+            var which = doc.Lookup is null
+                ? $"This page documents `{doc.DotnetNamespace}.{doc.Component}` ({count}), the most fully documented one, which \"{doc.Component}\" alone returns."
+                : $"This page documents {Code(doc.Lookup)} ({count}); \"{doc.Component}\" alone returns the most fully documented one.";
             output.Add("");
-            output.Add($"⚠️ **\"{doc.Component}\" is ambiguous** — {doc.Alternates.Length} other Infragistics type(s) share this name, each in a different namespace/package with its own xmlns. This page documents `{doc.DotnetNamespace}.{doc.Component}` ({count}), the most fully documented one. The others are not indexed separately:");
-            output.AddRange(doc.Alternates.Select(a => doc.Values is null
-                ? $"- `{a.FullName}` — {a.MemberCount} members, NuGet `{a.NugetPackage}`"
-                : $"- `{a.FullName}` — NuGet `{a.NugetPackage}`"));
-            output.Add($"If the {(doc.Values is null ? "members" : "values")} below don't match the control you're using, you're likely on the other type — confirm which package/xmlns your project references before writing XAML.");
+            output.Add($"⚠️ **\"{doc.Component}\" is ambiguous** — {others.Length} other Infragistics type(s) share this name, each in a different namespace/package with its own xmlns. {which} To open another, pass its full name exactly as given:");
+            output.AddRange(others.Select(a => FormatAlternate(a, doc.Component)));
+            output.Add($"If the {(doc.Values is null ? "members" : "values")} below don't match the control you're using, you're likely on another type — confirm which package/xmlns your project references before writing XAML.");
+        }
+        // The same class listed under a second package (Infragistics.WPF.Spreadsheet.Charts.Trial ships the XML docs of
+        // XamSpreadsheet's assembly): not another type, so no page of its own.
+        if ((doc.Alternates ?? []).Where(a => a.SameType == true).Select(a => $"`{a.NugetPackage}`").ToArray() is { Length: > 0 } packages)
+        {
+            output.Add("");
+            output.Add($"_The same class, from the same assembly, is also listed under NuGet {string.Join(", ", packages)}._");
         }
 
         if (!string.IsNullOrEmpty(doc.Remarks))
@@ -327,7 +366,7 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             output.Add("");
             output.Add(values.Length > 0
                 ? $"_Showing {values.Length} {(values.Length == 1 ? "value" : "values")} whose name contains \"{memberFilter}\"._"
-                : $"_No values whose name contains \"{memberFilter}\". Call get_wpf_api_reference(\"{doc.Component}\") without \"member\" to see every value._");
+                : $"_No values whose name contains \"{memberFilter}\". Call get_wpf_api_reference(\"{self}\") without \"member\" to see every value._");
         }
         else if (!string.IsNullOrEmpty(memberFilter))
         {
@@ -348,7 +387,7 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
                 ? $"_Showing {members.Length} {(members.Length == 1 ? one : many)} whose name contains \"{memberFilter}\", including inherited ones._"
                 : obsolete.Length > 0
                     ? $"_No current {many} whose name contains \"{memberFilter}\"; the matching obsolete ones:_"
-                    : $"_No {many} whose name contains \"{memberFilter}\", including inherited ones. Call get_wpf_api_reference(\"{doc.Component}\") without \"member\" to see every member name, or search_wpf_api(\"{memberFilter}\") to find which type declares it._");
+                    : $"_No {many} whose name contains \"{memberFilter}\", including inherited ones. Call get_wpf_api_reference(\"{self}\") without \"member\" to see every member name, or search_wpf_api(\"{memberFilter}\") to find which type declares it._");
             foreach (var o in obsolete)
             {
                 var what = o.Signature is { } signature ? $"`{signature}`" : $"`{doc.Component}.{o.Name}`";
@@ -391,7 +430,7 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
         if (text.Length > MaxApiReferenceChars && values is not null)
         {
             var next = string.IsNullOrEmpty(memberFilter)
-                ? $"Call get_wpf_api_reference(component: \"{doc.Component}\", member: \"<name>\") for their numbers and summaries — \"member\" is a case-insensitive substring of the value name."
+                ? $"Call get_wpf_api_reference(component: \"{self}\", member: \"<name>\") for their numbers and summaries — \"member\" is a case-insensitive substring of the value name."
                 : "Call again with a more specific \"member\" for their numbers and summaries.";
             text = Render(ApiDetail.CompactAll, $"_ℹ️ Compacted: the full response would be {text.Length} characters, so values are listed by name only. {next}_");
         }
@@ -399,7 +438,7 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
         {
             var fullLength = text.Length;
             var next = string.IsNullOrEmpty(memberFilter)
-                ? $"Call get_wpf_api_reference(component: \"{doc.Component}\", member: \"<name>\") for full details (type, enum values, summary, every overload's signature) — \"member\" is a case-insensitive substring, so one call can cover a family of related members sharing a prefix."
+                ? $"Call get_wpf_api_reference(component: \"{self}\", member: \"<name>\") for full details (type, enum values, summary, every overload's signature) — \"member\" is a case-insensitive substring, so one call can cover a family of related members sharing a prefix."
                 : "Call again with a more specific \"member\" for full details (type, enum values, summary, every overload's signature).";
             string Compacted((ApiDetail detail, bool protectedByName) level) =>
                 Render(level.detail, $"_ℹ️ Compacted: the full response would be {fullLength} characters, so {CompactionSummary(level.detail, level.protectedByName)}. {next}_", level.protectedByName);

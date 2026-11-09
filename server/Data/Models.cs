@@ -12,7 +12,8 @@ public sealed record ComponentEntry(
     string DotnetNamespace,
     string NugetPackage,
     string Assembly,
-    string Description);
+    string Description,
+    AlternateType[]? Alternates = null);   // other types of this name (the newer XamComboEditor), opened by full name
 
 public sealed record ApiMemberEntry(
     string Name,
@@ -44,7 +45,20 @@ public sealed record ObsoleteMember(
     string? Signature = null,
     string? DeclaredOn = null);
 
-public sealed record AlternateType(string FullName, string NugetPackage, int MemberCount);
+/// Another type with the page's short name, or (SameType) the same class listed under another package.
+public sealed record AlternateType(
+    string FullName,
+    string NugetPackage,
+    int MemberCount,                         // properties + events + methods, inherited ones included
+    string? Assembly = null,
+    bool? SameType = null,                   // same assembly and full name as the page's type: no page of its own
+    string? Lookup = null,                   // what get_wpf_api_reference takes to open it: the full name (+ ", Assembly")
+    bool? IsDefault = null,                  // the type the short name opens
+    string? XamlNamespace = null,
+    string? DefaultPrefix = null,
+    string? Summary = null,                  // its summary's first sentence
+    int? ValueCount = null,                  // enums: how many values,
+    string[]? ValueNames = null);            // and the first few
 
 public sealed record ApiEntry(
     string Component,
@@ -65,7 +79,8 @@ public sealed record ApiEntry(
     ObsoleteMember[]? Obsolete = null,
     string? ObsoleteMessage = null,          // the type itself is [Obsolete]
     EnumValue[]? Values = null,              // enums only
-    bool? IsFlags = null);                   // a [Flags] enum
+    bool? IsFlags = null,                    // a [Flags] enum
+    string? Lookup = null);                  // a type that lost its short name (api/alternates/): what opens this page
 
 /// Compact entry in search-index.json — single-letter keys keep the ~5MB index small.
 public sealed record SearchIndexEntry(
@@ -73,7 +88,8 @@ public sealed record SearchIndexEntry(
     [property: JsonPropertyName("s")] string Summary,
     [property: JsonPropertyName("a")] string Assembly,
     [property: JsonPropertyName("p")] string NugetPackage,
-    [property: JsonPropertyName("m")] string[] Members);
+    [property: JsonPropertyName("m")] string[] Members,
+    [property: JsonPropertyName("f")] string? Lookup = null);   // types of a shared name: the full name that opens this one
 
 public record DocIndexEntry(
     string Slug,

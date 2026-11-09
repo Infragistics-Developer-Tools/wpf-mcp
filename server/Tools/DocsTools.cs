@@ -102,6 +102,9 @@ public sealed class DocsTools(DataStore store, ToolLog log)
                 msg = $"{controlMatchCount} topic(s) reference control \"{control}\", but none matched any word in \"{query}\". Try fewer/simpler keywords, or call search_wpf_docs(control: \"{control}\") with no query to browse all {controlMatchCount} topics for this component.";
             else
                 msg = $"No documentation topics found matching any word in \"{query}\". Try shorter or more general keywords (e.g. \"getting started\", \"grouping\", \"pin pane\"), or add `control` to browse a specific component's topics directly.";
+            // XamScheduler is the Xamarin control; no WPF topic uses the word, so a search for it ended here.
+            if ($"{query} {control}".Contains("scheduler", StringComparison.OrdinalIgnoreCase))
+                msg += " WPF has no XamScheduler (a Xamarin control): its scheduling controls are the XamSchedule family (XamScheduleView, XamDayView, XamMonthView, XamOutlookCalendarView), documented under control \"xamSchedule\" — call search_wpf_docs(control: \"xamSchedule\"), with `query` words to narrow.";
             log.Write("search_wpf_docs", input, msg, timer);
             return ToolResult.Error(msg);
         }

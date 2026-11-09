@@ -9,6 +9,7 @@ namespace Infragistics.Wpf.Mcp.Data;
 public sealed class DataStore
 {
     private readonly string _apiDir;
+    private readonly string _altDir;
     private readonly string _docsDir;
     private readonly string _themeDir;
 
@@ -22,6 +23,7 @@ public sealed class DataStore
     {
         root = Path.GetFullPath(root);
         _apiDir = Path.Combine(root, "api");
+        _altDir = Path.Combine(_apiDir, "alternates");
         _docsDir = Path.Combine(root, "docs");
         _themeDir = Path.Combine(root, "theme-resources");
 
@@ -36,6 +38,37 @@ public sealed class DataStore
 
     public ApiEntry? LoadApiDoc(string component) =>
         LoadByName(_apiDir, component, WpfJsonContext.Default.ApiEntry);
+
+    /// A type by short name ("XamComboEditor": the page that name opens, as LoadApiDoc) or by full name
+    /// ("Infragistics.Controls.Editors.XamComboEditor"; nested types "Ns.Outer.Inner" or "Ns.Outer+Inner"; plus
+    /// ", Assembly" for a full name two assemblies have). A full name also opens the types that lost their short name
+    /// to another (api/alternates/), found through the short name's page, which lists them. When there is no such
+    /// type, `byShortName` is that page, if any, for the not-found message.
+    public ApiEntry? LoadApiType(string name, out ApiEntry? byShortName)
+    {
+        byShortName = null;
+        // A short name, looked up exactly as before (no type's short name has a dot or a "+").
+        if (!name.Contains('.') && !name.Contains('+')) return LoadApiDoc(name);
+
+        // "Ns.Type, Assembly" — and a whole assembly-qualified name: ", Version=…" and the rest are ignored.
+        var parts = name.Split(',');
+        var fullName = parts[0].Trim().Replace('+', '.');
+        var assembly = parts.Length > 1 ? parts[1].Trim() : null;
+        var shortName = fullName[(fullName.LastIndexOf('.') + 1)..];
+        if (shortName.Length == 0 || LoadApiDoc(shortName) is not { } page) return null;
+        byShortName = page;
+
+        // The page's own type first (a full name two assemblies share opens it), then the others; exact case first.
+        foreach (var comparison in new[] { StringComparison.Ordinal, StringComparison.OrdinalIgnoreCase })
+        {
+            bool Matches(string typeFullName, string? typeAssembly) =>
+                string.Equals(typeFullName, fullName, comparison) && (assembly is null || string.Equals(typeAssembly, assembly, comparison));
+            if (Matches($"{page.DotnetNamespace}.{page.Component}", page.Assembly)) return page;
+            if (page.Alternates?.FirstOrDefault(a => a.Lookup is not null && Matches(a.FullName, a.Assembly)) is { } other)
+                return LoadByName(_altDir, other.Lookup!, WpfJsonContext.Default.ApiEntry);
+        }
+        return null;
+    }
 
     public DocEntry? LoadDoc(string slug) =>
         LoadByName(_docsDir, slug, WpfJsonContext.Default.DocEntry);
