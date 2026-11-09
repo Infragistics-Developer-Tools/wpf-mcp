@@ -266,11 +266,37 @@ async function main(): Promise<void> {
     }
     r = await call('search_wpf_docs', { query: 'column series', limit: 3 });
     check('docs-common topics resolved ({CategoryChartName} → real name)', !r.isError && /XamCategoryChart|XamDataChart/.test(textOf(r)), textOf(r).slice(0, 300));
+    // The Windows Forms / ASP.NET UltraChart docs (docs-common's win-web-chart, {WawChartName}) are not WPF.
+    r = await call('search_wpf_docs', { query: 'bar chart specific properties export pdf', limit: 50 });
+    check('no Windows Forms / ASP.NET chart topics', !textOf(r).includes('{WawChartName}'), textOf(r).slice(0, 300));
     if (IS_DOTNET) {
       // C# only: the TS server strips hyphens but not spaces from control names.
       r = await call('search_wpf_docs', { control: 'ThemeManager', limit: 50 });
       text = textOf(r);
       check('control "ThemeManager" matches topics tagged "IG Theme Manager"', !r.isError && text.includes('IG Theme Manager'), text.slice(0, 300));
+      // Topics tagged with a family (xamInputs, xamDataPresenter) are found by the controls they name.
+      r = await call('search_wpf_docs', { control: 'XamMaskedInput', limit: 3 });
+      check('control filter finds a family-tagged control', !r.isError && textOf(r).includes('**Controls:** xamInputs'), textOf(r).slice(0, 300));
+      r = await call('search_wpf_docs', { control: 'XamDataGrid', query: 'field layout', limit: 10 });
+      check('XamDataGrid also finds its xamDataPresenter topics', !r.isError && textOf(r).includes('**Controls:** xamDataPresenter'), textOf(r).slice(0, 300));
+      // Whole topics up to ~24K characters (this one, 22K, used to be cut at 6,000), with their code fenced.
+      r = await call('get_wpf_doc', { topic: 'implementing-undo-redo-crud-operations-in-xamgrid-control' });
+      text = textOf(r);
+      check('long topic comes back whole', !r.isError && !text.includes('truncated') && text.trimEnd().endsWith('Undo/Redo Framework™.') && text.includes('```csharp'), text.slice(-200));
+      // Code keeps its {…} tokens: the body used to read XAxisLabel="{}".
+      r = await call('get_wpf_doc', { topic: 'categorychart-binding-to-data' });
+      check('code keeps {Name}-style tokens', !r.isError && textOf(r).includes('XAxisLabel="{}{Name}"'), textOf(r).slice(0, 200));
+      // Longer topics come in pages, each with balanced code fences.
+      r = await call('get_wpf_doc', { topic: 'resources-customtheme.xamtilemanager', page: 2 });
+      text = textOf(r);
+      check('long topic pages with balanced fences', !r.isError && /comes in \d+ pages/.test(text) && text.includes('this is page 2') && (text.match(/^```/gm)?.length ?? 1) % 2 === 0, text.slice(0, 300));
+      r = await call('get_wpf_doc', { topic: 'resources-customtheme.xamtilemanager', page: 99 });
+      check('page out of range → isError', r.isError === true && textOf(r).includes('out of range'), textOf(r).slice(0, 200));
+      // [Range(1, 100)] isn't enforced by the SDK: page 0 is out of range too, for long and one-page topics alike.
+      r = await call('get_wpf_doc', { topic: 'resources-customtheme.xamtilemanager', page: 0 });
+      check('page 0 → out-of-range isError', r.isError === true && textOf(r).includes('page 0 is out of range'), textOf(r).slice(0, 200));
+      r = await call('get_wpf_doc', { topic: 'adding-an-assembly-to-an-expression-blend-project', page: 0 });
+      check('page 0 of a one-page topic → out-of-range isError', r.isError === true && textOf(r).includes('page 0 is out of range'), textOf(r).slice(0, 200));
     }
     r = await call('get_wpf_doc', { topic: 'no-such-topic-slug' });
     check('unknown slug → isError', r.isError === true);

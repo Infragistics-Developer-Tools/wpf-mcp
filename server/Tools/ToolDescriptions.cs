@@ -55,7 +55,7 @@ public static class ToolDescriptions
         """;
 
     public const string SearchWpfDocs = """
-        Search Infragistics WPF how-to and conceptual documentation (2,600+ topics from the official docs-wpf and docs-common repositories) by keyword and/or control name — this is the FULL documentation set, covering far more than child-element nesting: getting started, layouts, styling/theming, data binding, editing/validation, filtering/sorting/grouping/summaries, exporting, performance, commands, persistence, known issues, and breaking changes.
+        Search Infragistics WPF how-to and conceptual documentation (2,300+ topics from the official docs-wpf and docs-common repositories, WPF content only) by keyword and/or control name — this is the FULL documentation set, covering far more than child-element nesting: getting started, layouts, styling/theming, data binding, editing/validation, filtering/sorting/grouping/summaries, exporting, performance, commands, persistence, known issues, and breaking changes.
 
         Use this whenever a task goes beyond "what members exist on this type" — i.e. whenever you need to know HOW to accomplish something with a control (any non-trivial XAML, behavior, styling, or configuration), not only when the control nests child content. Pass the exact component name already resolved via list_wpf_components / search_wpf_api / get_wpf_api_reference as `control` to scope results to that component instead of searching all 2,600+ topics blind.
 
@@ -69,7 +69,7 @@ public static class ToolDescriptions
     public const string GetWpfDoc = """
         Retrieve the full text and extracted XAML code examples for one WPF documentation topic — any topic type: getting started, layouts/nesting, styling/theming, data binding, editing/validation, filtering/sorting/grouping/summaries, exporting, performance, commands, persistence, known issues, breaking changes, etc. Not limited to structural/nesting topics.
 
-        Use the exact slug returned by search_wpf_docs — this is always the last step of the discovery chain (list_wpf_components/search_wpf_api → get_wpf_api_reference → search_wpf_docs → get_wpf_doc), never the first call in a session. Returns the topic title, associated control names, tags, up to 6 XAML code samples (verified working examples from Infragistics' official docs), and the full descriptive body text.
+        Use the exact slug returned by search_wpf_docs — this is always the last step of the discovery chain (list_wpf_components/search_wpf_api → get_wpf_api_reference → search_wpf_docs → get_wpf_doc), never the first call in a session. Returns the topic title, associated control names, tags, and the whole topic as Markdown with its code samples (XAML, C#, VB — verified working examples from Infragistics' official docs) in ``` fences. Topics longer than ~24K characters come in pages split at their section headings: the response lists each page's sections; pass page: 2, 3, … for the rest.
 
         Call this before writing XAML or giving configuration/usage advice for any control whose behavior isn't already confirmed by an existing working example — this is the most effective way to avoid build errors from guessed property names, runtime errors from invalid nesting, and incorrect advice on styling, data binding, performance, or any other topic covered by the docs.
         """;

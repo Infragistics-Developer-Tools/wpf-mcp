@@ -111,7 +111,8 @@ internal static class XamlPages
         return pages;
     }
 
-    private static IEnumerable<string> Lines(string text, int budget)
+    /// The text as lines that keep their "\n" (a line longer than `budget` in pieces), so they add up to it exactly.
+    internal static IEnumerable<string> Lines(string text, int budget)
     {
         var start = 0;
         for (var i = 0; i <= text.Length; i++)

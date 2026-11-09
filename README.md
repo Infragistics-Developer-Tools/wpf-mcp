@@ -17,8 +17,8 @@ All tools are read-only (`readOnlyHint: true`, `openWorldHint: false`) — none 
 | `setup_wpf_theme` | List available named themes and the raw XAML files backing them, covering both theming mechanisms (legacy embedded-BAML `Theme="..."` and newer `ThemeManager`). Returns ready-to-paste apply steps. Call first for any theming task. |
 | `get_wpf_theme_resource` | Retrieve the full raw XAML of one theme/style resource-dictionary file (real `Style`/`ControlTemplate`/brush definitions) to copy and override. Large files come in pages that concatenate to the exact file; `find` returns single styles, templates or brushes in full. Use the exact `path` from `setup_wpf_theme`. |
 | `get_wpf_theme_palette` | Return a newer-family (ThemeManager) theme's color/brush palette — exact resource keys and values — plus verified steps to recolor that theme (control-level overrides or an extended theme) without creating a new one. |
-| `search_wpf_docs` | Search 2,600+ how-to documentation topics by keyword and/or control name — layouts, styling, data binding, filtering/sorting/grouping, exporting, performance, known issues, etc. |
-| `get_wpf_doc` | Full text (including XAML samples) of one documentation topic by slug. Use the `slug` from a `search_wpf_docs` result. |
+| `search_wpf_docs` | Search 2,300+ how-to documentation topics by keyword and/or control name — layouts, styling, data binding, filtering/sorting/grouping, exporting, performance, known issues, etc. A control name also finds the topics that cover it under a family (e.g. `XamMaskedInput` under xamInputs). |
+| `get_wpf_doc` | Full text of one documentation topic by slug, with its XAML, C# and VB samples; topics over ~24K characters come in pages. Use the `slug` from a `search_wpf_docs` result. |
 
 ## Installation
 
