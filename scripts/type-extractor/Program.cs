@@ -15,9 +15,11 @@
  *   "__xaml"                    : { "Assembly|Namespace.Type" (nested: "…|Namespace.Outer.Inner") : { xmlns, prefix, ns, xamlName? } }
  *   "__nonPublicTypes"          : [ "Assembly|Namespace.Type", … ]   (internal / private nested types, to leave out)
  *   "__nonPublicMembers"        : [ "Assembly|Namespace.Type.Member", … ]   (internal / private members, to leave out)
- *   "__members"                 : { "Assembly|<XML doc ID>" : { sig?, obsolete?, hidden? } }
- *                                 (every public / protected method and constructor, with its C# signature; properties,
- *                                 events, fields and the type itself only when they are indexers or marked obsolete / hidden)
+ *   "__members"                 : { "Assembly|<XML doc ID>" : { sig?, params?, overrides?, obsolete?, hidden? } }
+ *                                 (every public / protected method and constructor, with its C# signature and parameter
+ *                                 names; properties, events, fields and the type itself only when they are indexers or
+ *                                 marked obsolete / hidden)
+ *   "__nonPublicMethods"        : [ "Assembly|<XML doc ID>", … ]   (internal / private methods and constructors)
  *   "__memberTypes"             : [ "Assembly|Namespace.Type", … ]   (types whose members "__members" covers)
  */
 
@@ -136,6 +138,7 @@ var output = new SortedDictionary<string, object?>(StringComparer.Ordinal);
 var baseTypes = new SortedDictionary<string, string>(StringComparer.Ordinal);
 var nonPublicMembers = new SortedSet<string>(StringComparer.Ordinal);
 var members = new SortedDictionary<string, Dictionary<string, object>>(StringComparer.Ordinal);
+var nonPublicMethods = new SortedSet<string>(StringComparer.Ordinal);
 var memberTypes = new SortedSet<string>(StringComparer.Ordinal);
 
 foreach (var asm in loaded) {
@@ -173,9 +176,10 @@ foreach (var asm in loaded) {
         // ── Signatures and flags, keyed by XML doc ID ───────────────────────
         // The XML docs name a member by its doc ID ("M:Namespace.Type.Load(System.String,System.Boolean)"), which
         // also tells overloads apart. Reflection adds what the ID can't: return type, parameter names, out vs ref,
-        // defaults. Every public / protected method and constructor gets an entry, so an overload without one is not
-        // usable; properties, events and fields only when they are indexers or marked [Obsolete] / hidden from
-        // IntelliSense. A type that throws here stays out of "__memberTypes", and build-api keeps its members as before.
+        // defaults. Every public / protected method and constructor gets an entry, and every internal / private one is
+        // listed in "__nonPublicMethods", so build-api can tell an unusable overload from one whose ID didn't match;
+        // properties, events and fields only when they are indexers or marked [Obsolete] / hidden from IntelliSense.
+        // A type that throws here stays out of "__memberTypes", and build-api keeps its members as before.
         try {
             const BindingFlags declared = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance |
                                           BindingFlags.Static | BindingFlags.DeclaredOnly;
@@ -189,9 +193,13 @@ foreach (var asm in loaded) {
             }
             var methods = new List<(string Id, MethodBase M, string Sig)>();
             foreach (var m in t.GetMethods(declared).Cast<MethodBase>().Concat(t.GetConstructors(declared))) {
-                if (!IsUsable(m) || (m is ConstructorInfo && m.IsStatic)) continue;
+                if (m is ConstructorInfo && m.IsStatic) continue;
                 // Property / event accessors and explicit interface implementations ("IList.Add") aren't called by name.
                 if (m is MethodInfo && (m.Name.Contains('.') || (m.IsSpecialName && !m.Name.StartsWith("op_", StringComparison.Ordinal)))) continue;
+                if (!IsUsable(m)) {
+                    try { nonPublicMethods.Add($"{asmName}|{MethodDocId(typeId, m)}"); } catch { /* unreadable: stays unmatched */ }
+                    continue;
+                }
                 try { methods.Add((MethodDocId(typeId, m), m, MethodSignature(m))); } catch { /* unreadable signature: name-only */ }
             }
             // Overloads that differ only in a type's namespace (WorkbookColorInfo(System.Drawing.Color) and
@@ -201,6 +209,14 @@ foreach (var asm in loaded) {
                 string full;
                 try { full = ambiguous.Contains(id) ? MethodSignature(m, qualified: true) : sig; } catch { full = sig; }
                 Add(id, m, full);
+                if (!members.TryGetValue($"{asmName}|{id}", out var entry)) continue;
+                // The names build-api matches the XML's <param> descriptions against, read here rather than parsed
+                // back out of the signature.
+                var ps = m.GetParameters();
+                if (ps.Length > 0) entry["params"] = ps.Select((p, i) => p.Name ?? $"arg{i}").ToArray();
+                try {
+                    if (m is MethodInfo mi && OverriddenTail(mi, id[(typeId.Length + 3)..]) is { } overridden) entry["overrides"] = overridden;
+                } catch { /* unreadable base method: inherited by overload as before */ }
             }
             foreach (var p in t.GetProperties(declared)) {
                 if (!(IsUsable(p.GetMethod) || IsUsable(p.SetMethod)) || p.Name.Contains('.')) continue;
@@ -262,11 +278,13 @@ foreach (var asm in loaded) {
 output["__baseTypes"] = baseTypes;
 output["__nonPublicMembers"] = nonPublicMembers;
 output["__members"] = members;
+output["__nonPublicMethods"] = nonPublicMethods;
 output["__memberTypes"] = memberTypes;
 Console.Error.WriteLine($"[TypeExtractor] phase 2: {output.Count} entries, {baseTypes.Count} base types, {nonPublicMembers.Count} non-public members");
 Console.Error.WriteLine($"[TypeExtractor] phase 2: {members.Count(m => m.Value.ContainsKey("sig"))} signatures, " +
+    $"{members.Count(m => m.Value.ContainsKey("overrides"))} overrides of a generic base's method, " +
     $"{members.Count(m => m.Value.ContainsKey("obsolete"))} obsolete, {members.Count(m => m.Value.ContainsKey("hidden"))} hidden members, " +
-    $"{memberTypes.Count} types covered");
+    $"{nonPublicMethods.Count} non-public methods, {memberTypes.Count} types covered");
 
 // ── Non-public types ─────────────────────────────────────────────────────────
 // The XML docs also document internal and private nested classes (ActivePaneManager, XamFunnelController, …),
@@ -482,6 +500,23 @@ static string MethodDocId(string typeId, MethodBase m) {
     if (ps.Length > 0) id += $"({string.Join(",", ps.Select(p => ParamId(p.ParameterType)))})";
     if (m.Name is "op_Implicit" or "op_Explicit") id += "~" + ParamId(((MethodInfo)m).ReturnType);
     return id;
+}
+
+// For an override of a generic base type's method, the doc ID tail of the method it overrides: the base declares
+// "InsertItem(System.Int32,`0)", the override "InsertItem(System.Int32,Ns.Column)", so build-api can't tell from the
+// IDs alone that one replaces the other. Null when the tails are the same or the method overrides nothing.
+static string? OverriddenTail(MethodInfo m, string ownTail) {
+    var root = m.GetBaseDefinition();
+    if (root.DeclaringType is not { } rootType || rootType == m.DeclaringType) return null;
+    if (rootType.IsGenericType && !rootType.IsGenericTypeDefinition) {
+        // The ID is written against the type definition (`0), not the closed base (CollectionBase<Column>).
+        rootType = rootType.GetGenericTypeDefinition();
+        root = rootType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static |
+                                   BindingFlags.DeclaredOnly).First(x => x.MetadataToken == root.MetadataToken && x.Module == root.Module);
+    }
+    var rootTypeId = DocTypeId(rootType);
+    var rootTail = MethodDocId(rootTypeId, root)[(rootTypeId.Length + 3)..];
+    return rootTail == ownTail ? null : rootTail;
 }
 
 // A type inside a doc ID's parameter list: generic types as Name{Arg,…} (also a generic type naming itself, which

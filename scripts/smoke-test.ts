@@ -217,6 +217,16 @@ async function main(): Promise<void> {
       // Compacted lists name an overloaded method once, with its count.
       r = await call('get_wpf_api_reference', { component: 'XamDataGrid' });
       check('compacted lists show an overloaded method once with its count', !r.isError && textOf(r).includes('`LoadCustomizations` (8)'), textOf(r).slice(0, 200));
+      // An override of a generic base type's method replaces it: CollectionBase<T>.Insert(int, T) isn't listed again.
+      r = await call('get_wpf_api_reference', { component: 'ColumnBaseCollection', member: 'Insert' });
+      text = textOf(r);
+      check('an override of a generic base method is listed once',
+        !r.isError && text.includes('- `void Insert(int index, ColumnBase item)`:') && !text.includes('void Insert(int index, T item)'),
+        text.slice(0, 400));
+      // A member a subtype re-declares hidden from IntelliSense isn't inherited from the base either.
+      r = await call('get_wpf_api_reference', { component: 'TemplateColumn', member: 'ValueConverter' });
+      check('a member hidden on the subtype is not inherited from the base',
+        !r.isError && textOf(r).includes('No members whose name contains "ValueConverter"'), textOf(r).slice(0, 400));
     }
     r = await call('get_wpf_api_reference', { component: 'xamdatagrid', kind: 'events' });
     check('case-insensitive lookup + kind filter', !r.isError && textOf(r).includes('# XamDataGrid'));
