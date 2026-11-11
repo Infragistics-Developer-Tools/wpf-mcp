@@ -346,6 +346,9 @@ function stripProse(raw: string): string {
     // ── Remove formatting-only markers ───────────────────────────────────────
     // Block type annotations: [source, xaml], [NOTE], [TIP], etc.
     .replace(/^\[[^\]]+\]\s*$/gm, '')
+    // Block delimiters (==== example blocks, ===== …) are not text: left in, "==== " became an empty "####" heading below,
+    // and a bare "====" under a line makes it a Markdown heading
+    .replace(/^={4,}[ \t]*$/gm, '')
     // AsciiDoc heading markers (= / == / === …) → Markdown (# / ## / ### …): get_wpf_doc pages at them
     .replace(/^(={1,6}) /gm, (_, level: string) => '#'.repeat(level.length) + ' ')
     // Table delimiters

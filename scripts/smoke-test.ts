@@ -117,7 +117,9 @@ async function main(): Promise<void> {
     r = await call('get_wpf_api_reference', { component: 'DataPresenterRoyalDark' });
     text = textOf(r);
     check('theme class gets the Themes xmlns and its inherited static styles',
-      !r.isError && text.includes('xmlns:igThemes="http://infragistics.com/Themes"') && text.includes('**CellValuePresenter** `Style`') && text.includes('(inherited from `DataPresenterResourceSet`1`)'),
+      !r.isError && text.includes('xmlns:igThemes="http://infragistics.com/Themes"') && text.includes('**CellValuePresenter** `Style`') &&
+      // C# fences a name with a backtick in double backticks, so the Markdown code span holds; the frozen TS server doesn't.
+      text.includes(IS_DOTNET ? '(inherited from `` DataPresenterResourceSet`1 ``)' : '(inherited from `DataPresenterResourceSet`1`)'),
       text.slice(0, 400));
     // Static key/command fields are listed (they used to be dropped: DataPresenterCommands showed 0 of 71 commands).
     r = await call('get_wpf_api_reference', { component: 'DataPresenterCommands', kind: 'properties' });
@@ -364,7 +366,7 @@ async function main(): Promise<void> {
       text = textOf(r);
       check('scaffold: the newer XamComboEditor, the other named; XamSpreadsheet\'s own package',
         !r.isError && text.includes('dotnet add package Infragistics.WPF.Controls.Editors.XamComboEditor.Trial\n') && text.includes('xmlns:ig="http://schemas.infragistics.com/xaml"') &&
-        text.includes('not the only XamComboEditor: `Infragistics.Windows.Editors.XamComboEditor` is another') &&
+        text.includes('This is `Infragistics.Controls.Editors.XamComboEditor`. Another XamComboEditor exists: `Infragistics.Windows.Editors.XamComboEditor` (NuGet') &&
         text.includes('dotnet add package Infragistics.WPF.Spreadsheet.Trial\n') && !text.includes('Spreadsheet.Charts'),
         text.slice(0, 1200));
       r = await call('get_wpf_project_scaffold', { components: ['Infragistics.Windows.Editors.XamComboEditor'], projectName: 'SmokeApp' });
@@ -526,6 +528,9 @@ async function main(): Promise<void> {
       r = await call('get_wpf_doc', { topic: 'adding-an-assembly-to-an-expression-blend-project', page: 0 });
       check('page 0 of a one-page topic → out-of-range isError', r.isError === true && textOf(r).includes('page 0 is out of range'), textOf(r).slice(0, 200));
     }
+    // AsciiDoc block delimiters are dropped: "==== " became an empty "####" heading (99 in 50 topics; this one had 7).
+    r = await call('get_wpf_doc', { topic: 'excelengine-password-support' });
+    check('no empty headings or ==== block delimiters in a topic', !r.isError && !/^#{1,6}[ \t]*$|^={4,}[ \t]*$/m.test(textOf(r)), textOf(r).slice(0, 300));
     r = await call('get_wpf_doc', { topic: 'no-such-topic-slug' });
     check('unknown slug → isError', r.isError === true);
 

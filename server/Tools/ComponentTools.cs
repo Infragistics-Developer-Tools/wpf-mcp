@@ -215,7 +215,7 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             foreach (var group in inherited)
             {
                 output.Add("");
-                output.Add($"### {label} (inherited from `{group.Key}`)");
+                output.Add($"### {label} (inherited from {Code(group.Key)})");
                 if (IsCompact(detail, kindKey, inherited: true)) output.Add(FormatMemberNames(group));
                 else output.AddRange(Detailed(group.ToArray()));
             }
@@ -397,7 +397,7 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             foreach (var o in obsolete)
             {
                 var what = o.Signature is { } signature ? $"`{signature}`" : $"`{doc.Component}.{o.Name}`";
-                var from = o.DeclaredOn is { } declaredOn ? $" (inherited from `{declaredOn}`)" : "";
+                var from = o.DeclaredOn is { } declaredOn ? $" (inherited from {Code(declaredOn)})" : "";
                 output.Add($"- ⚠ OBSOLETE {o.Kind} {what}{from}: {(string.IsNullOrEmpty(o.Message) ? "don't use it." : o.Message)}");
             }
         }
@@ -413,9 +413,9 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             footer.Add($"_This type's own API surface is empty or was filtered by \"kind\". {baseHint}_");
         }
 
-        // Theming hint only when the type has Brush-typed members AND ships with named themes. Not protected ones
-        // (XamChart3D.CrosshairRamp): an app can't set those.
-        var brushMembers = allMembers.Where(m => m.m.IsProtected != true && m.m.TypeName?.Contains("Brush", StringComparison.Ordinal) == true).Select(m => m.m).ToArray();
+        // Theming hint only when the response lists Brush-typed members (not on a `member: "Axes"` lookup) AND the type
+        // ships with named themes. Not protected ones (XamChart3D.CrosshairRamp): an app can't set those.
+        var brushMembers = members.Where(m => m.m.IsProtected != true && m.m.TypeName?.Contains("Brush", StringComparison.Ordinal) == true).Select(m => m.m).ToArray();
         if (brushMembers.Length > 0 && ThemeLookup.IsThemeable(doc.Component, store.ThemeIndex))
         {
             var examples = string.Join(", ", brushMembers.Take(3).Select(m => $"`{m.Name}`"));
@@ -540,8 +540,9 @@ public sealed partial class ComponentTools(DataStore store, ToolLog log)
             {
                 // A name another control shares names it, with the full name that scaffolds it instead.
                 var note = entry.Alternates is { Length: > 0 } alternates
-                    ? $"`{entry.DotnetNamespace}.{entry.Component}`; not the only {entry.Component}: " + string.Join("; ", alternates.Select(a =>
-                        $"`{a.FullName}` is another (NuGet `{a.NugetPackage}`, `xmlns:{a.DefaultPrefix}=\"{a.XamlNamespace}\"`) — pass \"{a.Lookup}\" in components for that one"))
+                    ? $"This is `{entry.DotnetNamespace}.{entry.Component}`. {(alternates.Length == 1 ? $"Another {entry.Component} exists" : $"Other {entry.Component} types exist")}: " +
+                        string.Join("; ", alternates.Select(a =>
+                        $"`{a.FullName}` (NuGet `{a.NugetPackage}`, `xmlns:{a.DefaultPrefix}=\"{a.XamlNamespace}\"`) — pass \"{a.Lookup}\" in components for that one")) + "."
                     : null;
                 resolved.Add((entry.Component, entry.NugetPackage, $"xmlns:{entry.DefaultPrefix}=\"{entry.XamlNamespace}\"", note));
             }
