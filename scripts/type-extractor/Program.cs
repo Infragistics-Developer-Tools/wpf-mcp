@@ -23,9 +23,12 @@
  *   "__memberTypes"             : [ "Assembly|Namespace.Type", … ]   (types whose members "__members" covers)
  *   "__enums"                   : { "Assembly|Namespace.Type" : { flags?, values: [ { name, value }, … ] } }
  *                                 (every public enum, nested ones too, its values in declaration order)
+ *   "__themeMappings"           : { "<Theme>" : { "Namespace.Type" : "<Theme>.xamDataPresenter.xaml" } }
+ *                                 (the controls each ThemeManager theme styles and the file in its Themes/ folder for each)
  */
 
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -460,6 +463,56 @@ foreach (var x in xamlTypes) {
 }
 output["__xaml"] = xamlOut;
 Console.Error.WriteLine($"[TypeExtractor] phase 3: {xamlOut.Count} XAML namespaces ({xamlTypes.Count(x => x.IsClr)} clr-namespace, {unresolved} unresolvable)");
+
+// ── Phase 4: the controls each ThemeManager theme styles ─────────────────────
+// Infragistics.Themes.ThemeManager.ApplicationTheme = new RoyalDarkTheme() styles every control in the theme's
+// Mappings (control full name → pack URI of a file in the theme's Themes/ folder), Infragistics.Windows controls such
+// as XamDataGrid included. Many of those files name no TargetType for the control — RoyalDark.xamDataPresenter.xaml
+// only merges <igThemes:DataPresenterRoyalDark /> — so the theme's own map is the only source. Mappings is protected
+// and filled by ThemeBase's private Initialize(), which ThemeManager calls when the theme is applied.
+const string ThemeAssemblyPrefix = "Infragistics.WPF.Themes.";
+var themeBase = loaded.Select(a => a.GetType("Infragistics.Themes.ThemeBase")).FirstOrDefault(t => t != null);
+var themeInit = themeBase?.GetMethod("Initialize", BindingFlags.Instance | BindingFlags.NonPublic, Type.EmptyTypes);
+var themeMappings = themeBase?.GetProperty("Mappings", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+if (themeBase == null || themeInit == null || themeMappings == null) {
+    Console.Error.WriteLine("[TypeExtractor] ERROR: Infragistics.Themes.ThemeBase, its Initialize() or its Mappings not found — " +
+        "the ThemeManager API changed; Phase 4 in scripts/type-extractor/Program.cs needs updating.");
+    return 1;
+}
+var themeMaps = new SortedDictionary<string, SortedDictionary<string, string>>(StringComparer.Ordinal);
+var notTypes = new SortedSet<string>(StringComparer.Ordinal);
+foreach (var asm in loaded.Where(a => a.GetName().Name!.StartsWith(ThemeAssemblyPrefix, StringComparison.OrdinalIgnoreCase))) {
+    foreach (var t in SafeGetTypes(asm).Where(t => !t.IsAbstract && themeBase.IsAssignableFrom(t))) {
+        IDictionary map;
+        try {
+            var theme = Activator.CreateInstance(t)!;
+            themeInit.Invoke(theme, null);
+            map = (IDictionary)themeMappings.GetValue(theme)!;
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"[TypeExtractor] ERROR: could not read {t.FullName}'s Mappings: {(ex.InnerException ?? ex).Message}");
+            return 1;
+        }
+        // Keyed by theme name, which is also its folder in wpf-resources' Themes/ (Infragistics.WPF.Themes.RoyalDark → RoyalDark).
+        var files = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        foreach (DictionaryEntry e in map) {
+            var control = (string)e.Key;
+            // Not every key is a type: Infragistics.Themes.MsControls names the file for the standard WPF controls.
+            if (!knownTypes.ContainsKey(control)) { notTypes.Add(control); continue; }
+            var uri = (string)e.Value!;
+            files[control] = uri[(uri.LastIndexOfAny(['/', '\\']) + 1)..];
+        }
+        themeMaps[asm.GetName().Name![ThemeAssemblyPrefix.Length..]] = files;
+    }
+}
+if (themeMaps.Count == 0 || themeMaps.Values.Any(m => m.Count == 0)) {
+    Console.Error.WriteLine($"[TypeExtractor] ERROR: {themeMaps.Count} ThemeManager themes found, " +
+        $"{themeMaps.Count(m => m.Value.Count == 0)} of them mapping no control — are the Infragistics.WPF.Themes.*.Trial packages " +
+        "still in nuget/WpfDocs.csproj? Without them setup_wpf_theme shows XamDataGrid & co. as legacy-only.");
+    return 1;
+}
+output["__themeMappings"] = themeMaps;
+Console.Error.WriteLine($"[TypeExtractor] phase 4: {themeMaps.Count} ThemeManager themes, {themeMaps.Sum(m => m.Value.Count)} control → file " +
+    $"mappings ({themeMaps.Values.SelectMany(m => m.Keys).Distinct().Count()} controls; keys that are no type, left out: {string.Join(", ", notTypes)})");
 
 // ── Write JSON ────────────────────────────────────────────────────────────────
 

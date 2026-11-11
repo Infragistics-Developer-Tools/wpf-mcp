@@ -287,7 +287,7 @@ Theme files used to be cut at 24,000 characters, and 436 of the 822 (26.1.21) ar
 | `dist/data/namespaces.json` | ~50 KB | at startup | 183 Xam* control registry |
 | `dist/data/search-index.json` | ~5 MB | at startup | compact index (`n,s,a,p,m` keys): name, summary, member names; `f`: full name of a type whose name others share |
 | `dist/data/docs-index.json` | ~1 MB | at startup | topic slugs, titles, control names, summaries |
-| `dist/data/theme-index.json` | small | at startup | theme/style files with parsed `targetTypes` |
+| `dist/data/theme-index.json` | small | at startup | theme/style files with their `targetTypes` (parsed `TargetType=`, plus the controls each ThemeManager theme maps to the file) |
 | `dist/data/build-info.json` | tiny | at startup | what the data was built from; printed to stderr |
 | `dist/data/api/{Type}.json` | 5–15 KB each | on demand | full member details |
 | `dist/data/api/alternates/{Full.Name}.json` | same | on demand | the other types of a shared short name, opened by full name |

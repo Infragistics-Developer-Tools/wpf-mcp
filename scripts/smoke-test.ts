@@ -542,6 +542,13 @@ async function main(): Promise<void> {
       r = await call('setup_wpf_theme', { component: 'DataChart', theme: 'IG' });
       text = textOf(r);
       check('IG apply block uses the IgTheme class', !r.isError && text.includes('new Infragistics.Themes.IgTheme()') && !text.includes('IGTheme()'), text.slice(0, 600));
+      // ThemeManager.ApplicationTheme styles XamDataGrid too (the theme DLL maps it to <Theme>.xamDataPresenter.xaml,
+      // which names no TargetType); before, agents got only Theme="..." and used the legacy ThemeManager.
+      r = await call('setup_wpf_theme', { component: 'XamDataGrid', theme: 'RoyalDark' });
+      text = textOf(r);
+      check('XamDataGrid gets the ThemeManager route, before Theme=', !r.isError &&
+        text.includes('Themes/RoyalDark/RoyalDark.xamDataPresenter.xaml') && text.includes('ApplicationTheme = new Infragistics.Themes.RoyalDarkTheme()') &&
+        text.indexOf('## Newer family') < text.indexOf('## Legacy family') && text.includes('`XamDataGrid` is in both families'), text.slice(0, 600));
     }
 
     console.log('get_wpf_theme_resource');
