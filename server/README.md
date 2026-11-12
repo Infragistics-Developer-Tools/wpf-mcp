@@ -2,7 +2,7 @@
 
 <!-- mcp-name: io.github.Infragistics-Developer-Tools/wpf-mcp -->
 
-MCP server for **Infragistics Ultimate UI for WPF** — component registry, XAML namespace lookup, full API reference with property types and enum values, keyword search across 5,300+ public types, 2,600+ documentation topics, and named-theme setup with verified recolor steps. Everything an AI coding agent needs to write correct Infragistics XAML instead of guessing.
+MCP server for **Infragistics Ultimate UI for WPF** — component registry, XAML namespace lookup, full API reference with property types, enum values and method signatures, keyword search across 5,100+ public types, 2,300+ documentation topics, and named-theme setup with verified recolor steps. Everything an AI coding agent needs to write correct Infragistics XAML instead of guessing.
 
 Packaged as a `dotnet tool`. All Infragistics data ships inside the package; nothing is downloaded at runtime, and every tool is read-only.
 
@@ -91,12 +91,12 @@ To use `dnx` instead of a global install, set `"command": "dnx"` and `"args": ["
 | `list_wpf_components` | List all Xam* controls with canonical XAML namespace URIs, NuGet packages, and descriptions. Always call this first before writing XAML. |
 | `get_wpf_project_scaffold` | Generate ready-to-run `dotnet new` + `dotnet add package` + `dotnet restore` commands and xmlns declarations for a new WPF project. |
 | `search_wpf_api` | Search across all types by keyword — matches type names, summaries, and member names. Use when you don't know the exact type name. |
-| `get_wpf_api_reference` | Full API reference for any type: properties with types and enum values, events, methods, and inherited members grouped by base class. Large types are compacted to stay under ~25K characters (events and methods first, then inherited members, are listed by name only); the optional `member` filter (case-insensitive name substring, e.g. `"YAxis"`) returns full details for just the members you need. |
+| `get_wpf_api_reference` | Full API reference for any type: properties with types and enum values, constructors and methods with the C# signature of every overload, events, and inherited members grouped by base class. Obsolete members are left out; looking one up returns its replacement. Large types are compacted to stay under ~25K characters (events and methods first, then inherited members, are listed by name only); the optional `member` filter (case-insensitive name substring, e.g. `"YAxis"`) returns full details, including parameter descriptions, for just the members you need. |
 | `setup_wpf_theme` | List available named themes and the raw XAML files backing them, covering both theming mechanisms (legacy embedded-BAML `Theme="..."` and newer `ThemeManager`). Returns ready-to-paste apply steps. |
 | `get_wpf_theme_resource` | Retrieve the full raw XAML of one theme/style resource-dictionary file (real `Style`/`ControlTemplate`/brush definitions) to copy and override. Large files come in pages that concatenate to the exact file; `find` returns single styles, templates or brushes in full. |
 | `get_wpf_theme_palette` | Return a newer-family (ThemeManager) theme's color/brush palette — exact resource keys and values — plus verified steps to recolor that theme (control-level overrides or an extended theme) without creating a new one. |
-| `search_wpf_docs` | Search how-to documentation topics by keyword and/or control name — layouts, styling, data binding, filtering/sorting/grouping, exporting, performance, known issues, etc. |
-| `get_wpf_doc` | Full text (including XAML samples) of one documentation topic by slug. |
+| `search_wpf_docs` | Search how-to documentation topics by keyword and/or control name — layouts, styling, data binding, filtering/sorting/grouping, exporting, performance, known issues, etc. A control name also finds the topics that cover it under a family (e.g. `XamMaskedInput` under xamInputs). |
+| `get_wpf_doc` | Full text of one documentation topic by slug, with its XAML, C# and VB samples; topics over ~24K characters come in pages. |
 
 All tools are annotated `readOnlyHint: true`, `openWorldHint: false` — none of them modify your project, filesystem, or any external system.
 

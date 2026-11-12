@@ -9,10 +9,11 @@
  *
  * Sources (docs/wpf-resources submodule — https://github.com/Infragistics/wpf-resources):
  *   Themes/{ThemeName}/*.xaml
- *     Per-theme resource dictionaries for the newer "Infragistics.Controls.*" family
- *     (charts, gauges, etc.) — applied at runtime via Infragistics.Themes.ThemeManager,
- *     not embedded in the component assemblies. One folder per named theme
- *     (MetroDark, RoyalDark, Office2013, ...), containing both per-control files
+ *     Per-theme resource dictionaries applied at runtime via Infragistics.Themes.ThemeManager
+ *     (ApplicationTheme = new MetroDarkTheme()), not embedded in the component assemblies:
+ *     the "Infragistics.Controls.*" controls (charts, gauges, etc.) and most "Infragistics.Windows.*"
+ *     ones too (XamDataGrid, the xamEditors, XamDockManager, XamRibbon, ...). One folder per named
+ *     theme (MetroDark, RoyalDark, Office2013, ...), containing both per-control files
  *     (e.g. "MetroDark.xamDataChart.xaml") and shared/core files (e.g.
  *     "MetroDark.WPF.xaml", "MetroDark.Theme.Colors.xaml").
  *
@@ -23,6 +24,11 @@
  *     applied just by setting `Theme="MetroDark"` on the control — no merging needed
  *     for the out-of-the-box look. The raw XAML here is useful for *customizing*:
  *     copy the relevant Style/ControlTemplate and override just the parts you need.
+ *
+ *   nuget/type-info.json "__themeMappings" (the type extractor, from the theme DLLs)
+ *     Which controls each ThemeManager theme styles, and with which of its files. Many of those
+ *     files name no TargetType for the control (RoyalDark.xamDataPresenter.xaml only merges
+ *     <igThemes:DataPresenterRoyalDark />), so without it XamDataGrid looked legacy-only.
  *
  * Deliberately excluded: Dictionaries/ (spell-check word lists) and ResourceStrings/
  * (localization .resx) — not relevant to visual theming. Only *.xaml files are copied
@@ -53,7 +59,7 @@ const INDEX_FILE          = join(OUT_DATA_DIR, 'theme-index.json');
 interface ThemeResourceFile {
   path: string; // relative path used as the get_wpf_theme_resource `path` input, e.g. "Themes/MetroDark/MetroDark.xamDataChart.xaml"
   file: string; // filename only, e.g. "MetroDark.xamDataChart.xaml"
-  targetTypes: string[]; // distinct control type names actually styled inside this file (parsed from TargetType="...")
+  targetTypes: string[]; // distinct control type names this file styles: parsed from TargetType="...", plus for Themes/ files the controls the theme's ThemeManager maps to it
 }
 
 interface NewerThemeEntry {
@@ -121,16 +127,46 @@ function toResourceFiles(srcDir: string, prefix: string, files: string[]): Theme
   }));
 }
 
-// ── Newer "Infragistics.Controls.*" ThemeManager themes ──────────────────────
+// ── Newer ThemeManager themes ─────────────────────────────────────────────────
+
+// Theme name → { control full name → file name }, from the theme DLLs (see "Phase 4" in type-extractor/Program.cs).
+const TYPE_INFO = join(ROOT, 'nuget', 'type-info.json');
+assertBuildStep(existsSync(TYPE_INFO),
+  `nuget/type-info.json not found. Without its "__themeMappings", setup_wpf_theme would show XamDataGrid, the ` +
+  `xamEditors, XamTreeGrid, ... as legacy-only (Theme="..."), though ThemeManager.ApplicationTheme styles them. ` +
+  `Run: npm run generate:types`
+);
+const themeMappings = JSON.parse(readFileSync(TYPE_INFO, 'utf-8')).__themeMappings as Record<string, Record<string, string>> | undefined;
+assertBuildStep(!!themeMappings && Object.keys(themeMappings).length > 0,
+  `nuget/type-info.json has no "__themeMappings" section — it was written by an older type extractor. Run: npm run generate:types`
+);
 
 const newerThemes: NewerThemeEntry[] = [];
+const unmatched: string[] = [];
+let mapped = 0;
 for (const themeName of listSubdirs(THEMES_SRC)) {
   const srcDir = join(THEMES_SRC, themeName);
   const files = listXamlFiles(srcDir);
   if (!files.length) continue;
   copyXaml(srcDir, join(OUT_RESOURCES_DIR, 'Themes', themeName), files);
-  newerThemes.push({ theme: themeName, files: toResourceFiles(srcDir, `Themes/${themeName}`, files) });
+  const entry = { theme: themeName, files: toResourceFiles(srcDir, `Themes/${themeName}`, files) };
+  // The DLL names the files with other casing ("Themes\RoyalDark.XamDataPresenter.xaml", "Ig.xamBarcode.xaml").
+  const themeKey = Object.keys(themeMappings!).find(k => k.toLowerCase() === themeName.toLowerCase());
+  for (const [control, fileName] of Object.entries(themeKey ? themeMappings![themeKey] : {})) {
+    const file = entry.files.find(f => f.file.toLowerCase() === fileName.toLowerCase());
+    if (!file) { unmatched.push(`${themeName}: ${control} → ${fileName}`); continue; }
+    const name = control.split(/[.+]/).pop()!;
+    if (!file.targetTypes.includes(name)) file.targetTypes = [...file.targetTypes, name].sort();
+    mapped++;
+  }
+  newerThemes.push(entry);
 }
+const missingThemes = Object.keys(themeMappings!).filter(k => !newerThemes.some(t => t.theme.toLowerCase() === k.toLowerCase()));
+assertBuildStep(unmatched.length === 0 && missingThemes.length === 0,
+  `The theme DLLs map controls to ${unmatched.length} file(s) and ${missingThemes.length} theme(s) that ` +
+  `docs/wpf-resources/Themes/ doesn't have (${[...missingThemes, ...unmatched].slice(0, 5).join('; ')}) — the submodule ` +
+  `and the NuGet theme packages are out of step. Bump them together.`
+);
 
 // ── Legacy "Infragistics.Windows.*" per-component embedded themes ────────────
 
@@ -155,4 +191,5 @@ assertBuildStep(totalFiles > 0,
   `Needs a code fix in build-themes.ts, not a submodule re-init.`
 );
 
-console.log(`theme-index.json: ${newerThemes.length} newer themes, ${legacyStyles.length} legacy style folders, ${totalFiles} XAML files total.`);
+console.log(`theme-index.json: ${newerThemes.length} newer themes, ${legacyStyles.length} legacy style folders, ${totalFiles} XAML files total; ` +
+  `${mapped} ThemeManager control → file mappings applied.`);

@@ -27,6 +27,8 @@ public sealed partial class ThemeTools(DataStore store, ToolLog log)
         "",
         NewerMechanismLine,
         "",
+        "_The ThemeManager also themes most legacy-family controls (XamDataGrid, the xamEditors, XamDockManager, XamRibbon, …): `setup_wpf_theme(component)` says so for each control it covers._",
+        "",
         "**Newer-family apply template (replace `<Name>` with the theme):**",
         "```sh",
         "dotnet add package Infragistics.WPF.Themes.<Name>.Trial",
@@ -57,7 +59,7 @@ public sealed partial class ThemeTools(DataStore store, ToolLog log)
         "    base.OnStartup(e);",
         "}",
         "```",
-        "_Covers the newer \"Infragistics.Controls.*\" family (charts, gauges, maps, XamGrid, etc.)._",
+        "_Themes the whole app: the Infragistics.Controls.* controls (charts, gauges, maps, XamGrid, …) and the Infragistics.Windows ones its files are listed for (XamDataGrid, the xamEditors, XamDockManager, XamRibbon, …)._",
     });
 
     // Built-in WPF types that appear as TargetType in nearly every ControlTemplate — an exact
@@ -209,6 +211,19 @@ public sealed partial class ThemeTools(DataStore store, ToolLog log)
         output.Add("");
         if (matchedLegacy.Length > 0) output.Add(LegacyMechanismLine);
         if (matchedNewer.Length > 0) output.Add(NewerMechanismLine);
+        // A control both families style (XamDataGrid, XamDockManager, …): say which to use, or agents read "legacy" as "Theme= only".
+        // Only a control with a Theme property takes Theme="<Name>" — not XamDataChart, whose DefaultStyles/ folder holds its
+        // default templates. Matched as "XamDataGrid" or as the "DataGrid" agents also pass.
+        var both = componentFilter is null ? null : matchedNewer
+            .SelectMany(t => t.files).SelectMany(f => f.TargetTypes)
+            .Where(tt => tt.ToLowerInvariant() == componentFilter || tt.ToLowerInvariant() == "xam" + componentFilter)
+            .Distinct(StringComparer.Ordinal)
+            .FirstOrDefault(tt => store.LoadApiDoc(tt)?.Properties.Any(p => p.Name == "Theme" && p.TypeName == "String") == true);
+        if (both is not null)
+        {
+            output.Add("");
+            output.Add($"_**`{both}` is in both families.** For an app-wide theme use `Infragistics.Themes.ThemeManager.ApplicationTheme` (newer family above): it themes `{both}` together with every other control. `Theme=\"<Name>\"` on the control is the per-control alternative._");
+        }
 
         if (totalFiles == 1)
         {

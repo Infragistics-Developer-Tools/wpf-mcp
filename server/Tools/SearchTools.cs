@@ -46,7 +46,7 @@ public sealed partial class SearchTools(DataStore store, ToolLog log)
         var tokens = Tokenize(query);
         limit = Math.Clamp(limit, 1, 50);
 
-        var results = new List<(string typeName, string summary, string nugetPackage, string matchedOn, int score)>();
+        var results = new List<(string typeName, string summary, string nugetPackage, string? lookup, string matchedOn, int score)>();
 
         foreach (var entry in store.SearchIndex)
         {
@@ -69,10 +69,15 @@ public sealed partial class SearchTools(DataStore store, ToolLog log)
                     : "summary";
 
             var score = nameHits * 4 + memberHits * 2 + summaryHits;
-            results.Add((entry.TypeName, entry.Summary, entry.NugetPackage, matchedOn, score));
+            results.Add((entry.TypeName, entry.Summary, entry.NugetPackage, entry.Lookup, matchedOn, score));
         }
 
-        var ordered = results.OrderByDescending(r => r.score).ToArray();
+        // Ties: the types of a shared name that the query spells exactly ("Axis": the chart's, Excel's) come first. They
+        // came after the others of their score, the ones that lost the name last of all, and the limit cut them off.
+        // OrderBy is stable, so every other result keeps its order.
+        var ordered = results.OrderByDescending(r => r.score)
+            .ThenByDescending(r => r.lookup is not null && string.Equals(r.typeName, query.Trim(), StringComparison.OrdinalIgnoreCase))
+            .ToArray();
         var totalFound = ordered.Length;
         var limited = ordered.Take(limit).ToArray();
 
@@ -86,8 +91,11 @@ public sealed partial class SearchTools(DataStore store, ToolLog log)
             return ToolResult.Error(msg);
         }
 
+        // A type whose name others share (the two XamComboEditors) says which full name opens it: the name alone opens one of them.
         var lines = limited.Select(r =>
-            $"### {r.typeName}\n- **Matched:** {r.matchedOn}\n- **NuGet:** `{r.nugetPackage}`\n- {(string.IsNullOrEmpty(r.summary) ? "_(no summary)_" : r.summary)}");
+            $"### {r.typeName}\n- **Matched:** {r.matchedOn}\n- **NuGet:** `{r.nugetPackage}`\n" +
+            (r.lookup is { } lookup ? $"- **Several types are named \"{r.typeName}\":** open this one with get_wpf_api_reference(\"{lookup}\")\n" : "") +
+            $"- {(string.IsNullOrEmpty(r.summary) ? "_(no summary)_" : r.summary)}");
 
         var text = string.Join("\n\n", new[]
             {
