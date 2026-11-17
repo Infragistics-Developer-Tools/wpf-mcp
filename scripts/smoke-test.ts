@@ -487,6 +487,16 @@ async function main(): Promise<void> {
       check('an include:: fragment is not listed', !r.isError && !textOf(r).includes('**Topic slug:** `configuring-specific-editor-fields`'), textOf(r).slice(0, 300));
       r = await call('get_wpf_doc', { topic: 'configuring-specific-editor-fields' });
       check('the include:: fragment still opens by its slug', !r.isError && textOf(r).includes('CurrencyField'), textOf(r).slice(0, 200));
+      // `slug` (what search_wpf_docs calls it) is read as `topic`; the SDK used to answer it with a generic error.
+      r = await call('get_wpf_doc', { slug: 'xamgrid-active-item' });
+      check('get_wpf_doc takes `slug` for `topic`', !r.isError && textOf(r).startsWith('## Active Item\n'), textOf(r).slice(0, 200));
+      r = await call('get_wpf_doc', { topic: 'xamgrid-active-item', slug: 'geographicmap' });
+      check('`topic` wins over `slug`', !r.isError && textOf(r).startsWith('## Active Item\n'), textOf(r).slice(0, 200));
+      r = await call('get_wpf_doc', {});
+      check('get_wpf_doc with neither names `topic`', r.isError === true && textOf(r) === '`topic` must not be empty.', textOf(r).slice(0, 200));
+      // docs-wpf's geographicmap.adoc (metadata name "xamgeographicmap") is left out for docs-common's; its name still opens it.
+      r = await call('get_wpf_doc', { topic: 'XamGeographicMap' });
+      check('"xamgeographicmap" opens the shared geographicmap topic', !r.isError && textOf(r).includes('**Topic slug:** `geographicmap`'), textOf(r).slice(0, 200));
       // A metadata name several files claim belongs to the file named after it; the rest keep their own file names.
       r = await call('get_wpf_doc', { topic: 'piechart-selection' });
       check('"piechart-selection" is the pie chart selection topic', !r.isError && textOf(r).startsWith('## Selection\n') && textOf(r).includes('selection feature in the XamPieChart'), textOf(r).slice(0, 300));

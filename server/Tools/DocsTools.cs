@@ -237,16 +237,22 @@ public sealed partial class DocsTools(DataStore store, ToolLog log)
                   Case-insensitive.
             """)]
         [MinLength(1), MaxLength(160)]
-        string topic,
+        string? topic = null,
         [Description("""
             Optional page number for topics too long for one response (the response says how many pages there are and
                   which sections each holds). Pages split at section headings and concatenate to the whole topic.
             """)]
         [Range(1, 100)]
-        int? page = null)
+        int? page = null,
+        [Description("Alias of `topic` (the same slug), read only when `topic` is not given. Prefer `topic`.")]
+        [MaxLength(160)]
+        string? slug = null)
     {
         var timer = Stopwatch.StartNew();
-        var input = new { topic, page };
+        var input = new { topic, page, slug };
+        // Agents that just read "**Topic slug:**" in search_wpf_docs pass `slug` (7 calls in 36 sessions), which the SDK
+        // answered with its generic "An error occurred invoking" — so `topic` is optional in the schema and checked here.
+        topic = string.IsNullOrWhiteSpace(topic) ? slug ?? "" : topic;
         if (ToolInput.CheckLength("topic", topic, max: 160, min: 1) is { } invalid)
         {
             log.Write("get_wpf_doc", input, invalid, timer);

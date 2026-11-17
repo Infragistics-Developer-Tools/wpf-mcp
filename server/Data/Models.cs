@@ -98,7 +98,8 @@ public record DocIndexEntry(
     string[] Tags,
     string Source,
     string Summary,
-    Dictionary<string, int>? Mentions = null);   // Xam* names the topic mentions, lowercased → count
+    Dictionary<string, int>? Mentions = null,    // Xam* names the topic mentions, lowercased → count
+    string[]? Aliases = null);                   // other names get_wpf_doc opens it by (a left-out docs-wpf file's slug)
 
 public sealed record DocEntry(
     string Slug,
@@ -109,7 +110,8 @@ public sealed record DocEntry(
     string Summary,
     string Body,                 // Markdown: # headings, code in ``` fences
     string[] XamlSnippets,
-    Dictionary<string, int>? Mentions = null) : DocIndexEntry(Slug, Title, ControlNames, Tags, Source, Summary, Mentions);
+    Dictionary<string, int>? Mentions = null,
+    string[]? Aliases = null) : DocIndexEntry(Slug, Title, ControlNames, Tags, Source, Summary, Mentions, Aliases);
 
 public sealed record ThemeResourceFile(string Path, string File, string[] TargetTypes);
 

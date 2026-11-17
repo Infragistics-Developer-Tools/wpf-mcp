@@ -71,8 +71,13 @@ public sealed class DataStore
         return null;
     }
 
+    // A topic's own slug first, then an alias: the slug of a docs-wpf file left out for the docs-common topic of the
+    // same file name ("xamgeographicmap" opens "geographicmap").
     public DocEntry? LoadDoc(string slug) =>
-        LoadByName(_docsDir, slug, WpfJsonContext.Default.DocEntry);
+        LoadByName(_docsDir, slug, WpfJsonContext.Default.DocEntry)
+        ?? (DocIndex.FirstOrDefault(e => e.Aliases?.Contains(slug, StringComparer.OrdinalIgnoreCase) == true) is { } aliased
+            ? LoadByName(_docsDir, aliased.Slug, WpfJsonContext.Default.DocEntry)
+            : null);
 
     /// Reads a theme XAML file by its theme-index-relative path. Null if missing, a
     /// directory, or outside the resources directory.

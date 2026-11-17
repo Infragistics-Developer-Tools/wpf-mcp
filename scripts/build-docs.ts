@@ -213,6 +213,8 @@ export interface DocIndexEntry {
   summary:      string;    // first ~220 chars of plain body text
   /** Xam* names the topic mentions, lowercased → count, e.g. { "xammaskedinput": 4 }. Only when there are any. */
   mentions?:    Record<string, number>;
+  /** Other names get_wpf_doc opens this topic by: the slug of a docs-wpf file left out for this docs-common one. */
+  aliases?:     string[];
 }
 
 export interface DocEntry extends DocIndexEntry {
@@ -579,6 +581,13 @@ const sharedFiles = new Set(topics.filter(t => t.file.source === 'common').map(t
 const shadowed = topics.filter(t => t.file.source === 'wpf' && sharedFiles.has(fileName(t).toLowerCase()));
 topics = topics.filter(t => !shadowed.includes(t));
 skipped += shadowed.length;
+// A left-out file whose metadata name differs from the shared topic's stays as that topic's alias: docs-wpf's
+// geographicmap.adoc is named "xamgeographicmap", which get_wpf_doc opened (the bare title) and agents still ask for;
+// it answered "not found". Set on the topic object, so a later rename of the shared topic's slug keeps it.
+const aliasOwners = shadowed.flatMap(t => {
+  const shared = topics.find(c => c.file.source === 'common' && fileName(c).toLowerCase() === fileName(t).toLowerCase());
+  return shared && shared.entry.slug.toLowerCase() !== t.entry.slug.toLowerCase() ? [{ shared, alias: t.entry.slug }] : [];
+});
 
 // A topic's slug is its metadata name, and a few files claim another's: six data-pie-chart files, its overview among
 // them, are named "piechart-selection" (the pie chart's selection topic), whats-new-in-2017-volume-2
@@ -616,6 +625,14 @@ assertBuildStep(collisions.length === 0,
   `Topics that would share a slug: ${collisions.map(([slug, paths]) => `${slug} (${paths.join(', ')})`).join('; ')}. ` +
   `A file named after a metadata name keeps it and the others take their own file names, so these need a new rule.`
 );
+
+// An alias that is (now) a topic's own slug would never be reached: the topic of that name opens first.
+const aliased: string[] = [];
+for (const { shared, alias } of aliasOwners) {
+  if (bySlug.has(alias.toLowerCase()) || !topics.includes(shared)) continue;
+  shared.entry.aliases = [...(shared.entry.aliases ?? []), alias];
+  aliased.push(`${alias} → ${shared.entry.slug}`);
+}
 
 // A file that other topics include and that has a metadata name but no title (configuring-template-field,
 // shared-asynchronouspagingdatasource, the "xamdiagram … summary chart" tables) is not a page of its own: its text is
@@ -722,7 +739,8 @@ console.log(`  Shared names   : ${renamed.length} topics took their file name as
   `${sameAsNamed.length} left out as that file's copy (${sameAsNamed.map(where).join(', ')}):`);
 for (const r of renamed) console.log(`                   ${r}`);
 console.log(`  Same file      : ${shadowed.length} docs-wpf files left out for the docs-common file of the same name: ` +
-  shadowed.map(t => `${where(t)} (${t.entry.slug})`).join(', '));
+  shadowed.map(t => `${where(t)} (${t.entry.slug})`).join(', ') +
+  `; ${aliased.length} of their names kept as an alias of the shared topic (${aliased.join(', ')})`);
 console.log(`  Skipped        : ${skipped}  (other platforms, ${untitled.length} untitled without a metadata name, ` +
   `include-only files, docs-wpf files a docs-common one replaces, copies of a named file, empty)`);
 console.log(`  Index          : ${INDEX_FILE}`);
