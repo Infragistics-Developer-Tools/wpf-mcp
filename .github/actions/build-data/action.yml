@@ -4,7 +4,7 @@ description: >
   (type extractor → API → docs → themes), compiles both servers (Node and
   C#), runs the smoke test against each, then packs the NuGet package into
   nupkg/. Windows only — the type extractor loads WPF assemblies. Shared by
-  nodejs.yml and nuget-publish.yml so CI and the release can never drift.
+  dotnet-ci.yml and nuget-publish.yml so CI and the release can never drift.
 
 inputs:
   node-version:
