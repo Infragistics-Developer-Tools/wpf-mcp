@@ -1,9 +1,18 @@
 # [0.1.0-beta.2](https://github.com/Infragistics-Developer-Tools/wpf-mcp/compare/0.1.0-beta.1...0.1.0-beta.2) (2026-11-17)
 
 
-### Bug Fixes
+### Features
+* **api-reference:** methods and constructors show their full C# signature and parameter descriptions; obsolete members and types are flagged with the replacement to use
+* **data:** built from Infragistics 26.1.54 (was 26.1.21): 12 new types, 706 new member entries
 
-* **docs:** get_wpf_doc accepts `slug`; "xamgeographicmap" opens the shared topic ([c7b8d56](https://github.com/Infragistics-Developer-Tools/wpf-mcp/commit/c7b8d56a00c00d8373c6cd78e6dc4e1b1641668b))
+### Bug Fixes
+* **api-data:** types and members hidden from IntelliSense are no longer listed; `<paramref>`, `<see langword>` and `<see cref>` text is no longer dropped from summaries
+* **theme:** `setup_wpf_theme` no longer offers a `Printing` theme (no such class or package); `Themes/Printing` is listed as a resource dictionary you merge yourself
+* **docs:** `get_wpf_doc` accepts `slug` as an alias for `topic`, and `xamgeographicmap` opens the `geographicmap` topic
+
+### Changes
+* **ci:** the full build runs in a dedicated `.NET CI` workflow (Node 24); `nodejs.yml` only type-checks
+
 # [0.1.0-beta.1](https://github.com/Infragistics-Developer-Tools/wpf-mcp/compare/0.1.0-beta.0...0.1.0-beta.1) (2026-10-26)
 
 
