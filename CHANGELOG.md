@@ -1,3 +1,9 @@
+# [0.1.0-beta.2](https://github.com/Infragistics-Developer-Tools/wpf-mcp/compare/0.1.0-beta.1...0.1.0-beta.2) (2026-11-17)
+
+
+### Bug Fixes
+
+* **docs:** get_wpf_doc accepts `slug`; "xamgeographicmap" opens the shared topic ([c7b8d56](https://github.com/Infragistics-Developer-Tools/wpf-mcp/commit/c7b8d56a00c00d8373c6cd78e6dc4e1b1641668b))
 # [0.1.0-beta.1](https://github.com/Infragistics-Developer-Tools/wpf-mcp/compare/0.1.0-beta.0...0.1.0-beta.1) (2026-10-26)
 
 
