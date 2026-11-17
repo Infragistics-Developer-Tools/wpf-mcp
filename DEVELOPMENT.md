@@ -42,7 +42,7 @@ A healthy build ends with these counts (they drift slightly between Infragistics
 Registry:     183 Xam* controls → src/data/namespaces.json
 Search index: 6907 types → src/data/search-index.json
 Topics written : 2678
-theme-index.json: 8 newer themes, 45 legacy style folders, 822 XAML files total.
+theme-index.json: 7 newer themes (+1 Themes/ folder(s) that are no theme), 45 legacy style folders, 822 XAML files total; 555 ThemeManager control → file mappings applied.
 Build info → src/data/build-info.json
 ```
 

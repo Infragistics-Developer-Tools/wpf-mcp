@@ -63,7 +63,11 @@ interface ThemeResourceFile {
 }
 
 interface NewerThemeEntry {
-  theme: string; // e.g. "MetroDark"
+  theme: string; // the Themes/ folder name, e.g. "MetroDark"
+  // false for a Themes/ folder no theme DLL stands behind ("Printing": one print-friendly dictionary for
+  // XamPivotGrid reports, merged by hand). It has no <Name>Theme class and no Infragistics.WPF.Themes.<Name>
+  // package, so setup_wpf_theme must not offer it as a ThemeManager theme.
+  isTheme: boolean;
   files: ThemeResourceFile[];
 }
 
@@ -149,9 +153,10 @@ for (const themeName of listSubdirs(THEMES_SRC)) {
   const files = listXamlFiles(srcDir);
   if (!files.length) continue;
   copyXaml(srcDir, join(OUT_RESOURCES_DIR, 'Themes', themeName), files);
-  const entry = { theme: themeName, files: toResourceFiles(srcDir, `Themes/${themeName}`, files) };
   // The DLL names the files with other casing ("Themes\RoyalDark.XamDataPresenter.xaml", "Ig.xamBarcode.xaml").
   const themeKey = Object.keys(themeMappings!).find(k => k.toLowerCase() === themeName.toLowerCase());
+  // A folder is a ThemeManager theme when a theme DLL of that name exists (the extractor found its Mappings).
+  const entry: NewerThemeEntry = { theme: themeName, isTheme: !!themeKey, files: toResourceFiles(srcDir, `Themes/${themeName}`, files) };
   for (const [control, fileName] of Object.entries(themeKey ? themeMappings![themeKey] : {})) {
     const file = entry.files.find(f => f.file.toLowerCase() === fileName.toLowerCase());
     if (!file) { unmatched.push(`${themeName}: ${control} → ${fileName}`); continue; }
@@ -191,5 +196,5 @@ assertBuildStep(totalFiles > 0,
   `Needs a code fix in build-themes.ts, not a submodule re-init.`
 );
 
-console.log(`theme-index.json: ${newerThemes.length} newer themes, ${legacyStyles.length} legacy style folders, ${totalFiles} XAML files total; ` +
+console.log(`theme-index.json: ${newerThemes.filter(t => t.isTheme).length} newer themes (+${newerThemes.filter(t => !t.isTheme).length} Themes/ folder(s) that are no theme), ${legacyStyles.length} legacy style folders, ${totalFiles} XAML files total; ` +
   `${mapped} ThemeManager control → file mappings applied.`);

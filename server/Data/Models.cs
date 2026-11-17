@@ -113,7 +113,8 @@ public sealed record DocEntry(
 
 public sealed record ThemeResourceFile(string Path, string File, string[] TargetTypes);
 
-public sealed record NewerThemeEntry(string Theme, ThemeResourceFile[] Files);
+// IsTheme is false for a Themes/ folder that is no ThemeManager theme ("Printing": no PrintingTheme class, no theme package).
+public sealed record NewerThemeEntry(string Theme, ThemeResourceFile[] Files, bool IsTheme = true);
 
 public sealed record LegacyStyleEntry(string Folder, ThemeResourceFile[] Files);
 

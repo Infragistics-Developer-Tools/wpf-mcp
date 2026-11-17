@@ -554,6 +554,23 @@ async function main(): Promise<void> {
       check('XamDataGrid gets the ThemeManager route, before Theme=', !r.isError &&
         text.includes('Themes/RoyalDark/RoyalDark.xamDataPresenter.xaml') && text.includes('ApplicationTheme = new Infragistics.Themes.RoyalDarkTheme()') &&
         text.indexOf('## Newer family') < text.indexOf('## Legacy family') && text.includes('`XamDataGrid` is in both families'), text.slice(0, 600));
+      // Themes/Printing is one print-friendly dictionary for XamPivotGrid reports, not a theme: it used to get a
+      // paste-ready `new PrintingTheme()` + Infragistics.WPF.Themes.Printing.Trial, neither of which exists.
+      r = await call('setup_wpf_theme', {});
+      text = textOf(r);
+      check('"Printing" is not listed as a ThemeManager theme',
+        !r.isError && /## Newer family[\s\S]*?- \*\*RoyalLight\*\*[\s\S]*?## Other `Themes\/` folders[\s\S]*?- \*\*Printing\*\*[\s\S]*?## Legacy family/.test(text), text.slice(0, 600));
+      for (const args of [{ theme: 'Printing' }, { component: 'XamPivotGrid' }]) {
+        r = await call('setup_wpf_theme', args);
+        text = textOf(r);
+        check(`setup_wpf_theme(${JSON.stringify(args)}) lists the Printing file without an apply block`, !r.isError &&
+          text.includes('Themes/Printing/Printing.XamPivotGrid.xaml') && text.includes('`Printing` is not a ThemeManager theme') &&
+          !text.includes('new Infragistics.Themes.PrintingTheme()') && !text.includes('dotnet add package Infragistics.WPF.Themes.Printing.Trial'), text.slice(0, 600));
+      }
+      r = await call('get_wpf_theme_resource', { path: 'Themes/Printing/Printing.XamPivotGrid.xaml' });
+      text = textOf(r);
+      check('the Printing file is still readable, with the not-a-theme note', !r.isError &&
+        text.includes('PrintHeaderCellForegroundBrush') && text.includes('`Printing` is not a ThemeManager theme') && !text.includes('ApplicationTheme'), text.slice(0, 400));
     }
 
     console.log('get_wpf_theme_resource');

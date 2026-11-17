@@ -62,6 +62,14 @@ public sealed partial class ThemeTools(DataStore store, ToolLog log)
         "_Themes the whole app: the Infragistics.Controls.* controls (charts, gauges, maps, XamGrid, …) and the Infragistics.Windows ones its files are listed for (XamDataGrid, the xamEditors, XamDockManager, XamRibbon, …)._",
     });
 
+    // A Themes/ folder no theme DLL stands behind ("Printing", one print-friendly dictionary for XamPivotGrid reports):
+    // `new PrintingTheme()` and the Infragistics.WPF.Themes.Printing.Trial package don't exist, so it gets this note
+    // instead of the apply block.
+    private static string NotAThemeNote(string folder) =>
+        $"_`{folder}` is not a ThemeManager theme: there is no `{folder}Theme` class and no `Infragistics.WPF.Themes.{folder}.Trial` package. " +
+        "Its files are plain resource dictionaries: read one with get_wpf_theme_resource, add it to your project (Build Action: Page) and merge it " +
+        $"where it is needed (`Resources.MergedDictionaries`). search_wpf_docs(\"{folder.ToLowerInvariant()}\") finds the topic that uses it._";
+
     // Built-in WPF types that appear as TargetType in nearly every ControlTemplate — an exact
     // match on one of these says nothing about which control a file is for, so a component
     // filter equal to one of them falls back to filename matching only.
@@ -128,8 +136,14 @@ public sealed partial class ThemeTools(DataStore store, ToolLog log)
             output.Add("# Available WPF Themes");
             output.Add("");
             output.Add("## Newer family (ThemeManager) — theme names");
-            output.AddRange(index.NewerThemes.Select(t => $"- **{t.Theme}** ({t.Files.Length} file{(t.Files.Length == 1 ? "" : "s")})"));
+            output.AddRange(index.NewerThemes.Where(t => t.IsTheme).Select(t => $"- **{t.Theme}** ({t.Files.Length} file{(t.Files.Length == 1 ? "" : "s")})"));
             output.Add("");
+            if (index.NewerThemes.Any(t => !t.IsTheme))
+            {
+                output.Add("## Other `Themes/` folders — not themes (resource dictionaries you merge yourself)");
+                output.AddRange(index.NewerThemes.Where(t => !t.IsTheme).Select(t => $"- **{t.Theme}** ({t.Files.Length} file{(t.Files.Length == 1 ? "" : "s")}: {string.Join(", ", t.Files.Select(f => $"`{f.File}`"))})"));
+                output.Add("");
+            }
             output.Add("## Legacy family (Theme=\"...\" property) — style folders");
             output.AddRange(index.LegacyStyles.Select(s => $"- **{s.Folder}** ({s.Files.Length} file{(s.Files.Length == 1 ? "" : "s")})"));
             output.Add("");
@@ -143,13 +157,16 @@ public sealed partial class ThemeTools(DataStore store, ToolLog log)
 
         var matchedNewer = index.NewerThemes
             .Where(t => themeFilter is null || t.Theme.ToLowerInvariant().Contains(themeFilter, StringComparison.Ordinal))
-            .Select(t => (theme: t.Theme, files: t.Files.Where(f =>
+            .Select(t => (theme: t.Theme, isTheme: t.IsTheme, files: t.Files.Where(f =>
                 componentFilter is null ||
                 f.File.ToLowerInvariant().Contains(componentFilter, StringComparison.Ordinal) ||
                 (!GenericWpfTargetTypes.Contains(componentFilter) && f.TargetTypes.Any(tt => tt.ToLowerInvariant() == componentFilter))
             ).ToArray()))
             .Where(t => t.files.Length > 0)
             .ToArray();
+        // Themes/ folders that are no ThemeManager theme are listed apart, without the apply block.
+        var matchedOther = matchedNewer.Where(t => !t.isTheme).ToArray();
+        matchedNewer = matchedNewer.Where(t => t.isTheme).ToArray();
 
         var matchedLegacy = index.LegacyStyles
             .Select(s =>
@@ -172,14 +189,14 @@ public sealed partial class ThemeTools(DataStore store, ToolLog log)
             .Where(s => s.files.Length > 0)
             .ToArray();
 
-        if (matchedNewer.Length == 0 && matchedLegacy.Length == 0)
+        if (matchedNewer.Length == 0 && matchedLegacy.Length == 0 && matchedOther.Length == 0)
         {
             var msg = $"No theme resource files matched component=\"{component ?? ""}\" theme=\"{theme ?? ""}\". Call setup_wpf_theme with no arguments to browse all available theme names and style folders.";
             log.Write("setup_wpf_theme", input, msg, timer);
             return ToolResult.Error(msg);
         }
 
-        var totalFiles = matchedNewer.Sum(t => t.files.Length) + matchedLegacy.Sum(s => s.files.Length);
+        var totalFiles = matchedNewer.Sum(t => t.files.Length) + matchedLegacy.Sum(s => s.files.Length) + matchedOther.Sum(t => t.files.Length);
 
         output.Add($"# WPF Theme Resources{(!string.IsNullOrEmpty(component) ? $" — component: \"{component}\"" : "")}{(!string.IsNullOrEmpty(theme) ? $" — theme: \"{theme}\"" : "")} ({totalFiles} file{(totalFiles == 1 ? "" : "s")})");
 
@@ -208,7 +225,21 @@ public sealed partial class ThemeTools(DataStore store, ToolLog log)
             }
         }
 
-        output.Add("");
+        if (matchedOther.Length > 0)
+        {
+            output.Add("");
+            output.Add("## Other `Themes/` folders (not ThemeManager themes)");
+            foreach (var t in matchedOther)
+            {
+                output.Add("");
+                output.Add($"### {t.theme}");
+                output.AddRange(FormatResourceFiles(t.files, 20, componentFilter));
+                output.Add("");
+                output.Add(NotAThemeNote(t.theme));
+            }
+        }
+
+        if (matchedLegacy.Length > 0 || matchedNewer.Length > 0) output.Add("");
         if (matchedLegacy.Length > 0) output.Add(LegacyMechanismLine);
         if (matchedNewer.Length > 0) output.Add(NewerMechanismLine);
         // A control both families style (XamDataGrid, XamDockManager, …): say which to use, or agents read "legacy" as "Theme= only".
@@ -227,7 +258,8 @@ public sealed partial class ThemeTools(DataStore store, ToolLog log)
 
         if (totalFiles == 1)
         {
-            var singlePath = matchedNewer.Length > 0 ? matchedNewer[0].files[0].Path : matchedLegacy[0].files[0].Path;
+            var singlePath = matchedNewer.Length > 0 ? matchedNewer[0].files[0].Path
+                : matchedLegacy.Length > 0 ? matchedLegacy[0].files[0].Path : matchedOther[0].files[0].Path;
             output.Add("");
             output.Add($"_Exactly one file matched — call `get_wpf_theme_resource(\"{singlePath}\")` to read its XAML content._");
         }
@@ -297,7 +329,9 @@ public sealed partial class ThemeTools(DataStore store, ToolLog log)
         }
 
         var isNewerFamily = path.Replace('\\', '/').StartsWith("Themes/", StringComparison.Ordinal);
-        var mechanismNote = isNewerFamily
+        var notATheme = !isNewerFamily ? null : store.ThemeIndex.NewerThemes.FirstOrDefault(t => !t.IsTheme &&
+            path.Replace('\\', '/').StartsWith($"Themes/{t.Theme}/", StringComparison.OrdinalIgnoreCase))?.Theme;
+        var mechanismNote = notATheme is not null ? NotAThemeNote(notATheme) : isNewerFamily
             ? "_Newer family: apply via `Infragistics.Themes.ThemeManager.ApplicationTheme = new <Name>Theme();` (the IG theme's class is `IgTheme`) — do not merge this file directly into Application.Resources._"
             : "_Legacy family: the named theme is already embedded in the component assembly — set `Theme=\"...\"` on the control. Use this file to copy/override specific styles only._";
 
