@@ -2,7 +2,7 @@
 
 How to build, test, release and publish `Infragistics.Wpf.Mcp` (NuGet `dotnet tool`). For what the server does and how to install it, see [README.md](README.md).
 
-The C# server in `server/` is the only published runtime. The TypeScript server in `src/` still drives the data pipeline's tests and the parity check, and its npm packaging (`package.json`, `npm pack`) is kept so npm publishing can be revived — see [npm (retired)](#npm-retired).
+The C# server in `server/` is the only published runtime. The TypeScript server in `src/` is frozen: it is no longer edited, new tools and behavior go into C# only, and there is no parity check between the two. CI still runs the smoke test against it as a second consumer of the generated data, and its npm packaging (`package.json`, `npm pack`) is kept so npm publishing can be revived — see [npm (retired)](#npm-retired).
 
 ## Prerequisites
 
@@ -26,7 +26,7 @@ npm run build:all
 |---|---|---|---|
 | NuGet restore | `docs:restore` | `nuget/WpfDocs.csproj` | `nuget/packages/` |
 | Type extraction | `generate` → `scripts/generate.ts` → `dotnet run scripts/type-extractor` | `nuget/packages/**/*.dll` | `nuget/type-info.json` |
-| API build | `generate` → `scripts/build-api.ts` | `nuget/packages/**/*.xml` + `type-info.json` | `src/data/api/*.json`, `namespaces.json`, `search-index.json` |
+| API build | `generate` → `scripts/build-api.ts` | `nuget/packages/**/*.xml` + `type-info.json` | `src/data/api/*.json`, `src/data/api/alternates/*.json`, `namespaces.json`, `search-index.json` |
 | Docs build | `build:docs` | `docs/docs-wpf`, `docs/docs-common` | `src/data/docs/*.json`, `docs-index.json` |
 | Themes build | `build:themes` | `docs/wpf-resources` | `src/data/theme-resources/**`, `theme-index.json` |
 | Build info | `build:info` | csproj + submodule SHAs | `src/data/build-info.json` |
@@ -39,10 +39,10 @@ First run takes 2–5 minutes, almost all of it the NuGet restore and the type e
 A healthy build ends with these counts (they drift slightly between Infragistics versions):
 
 ```
-Registry:     191 Xam* controls → src/data/namespaces.json
+Registry:     183 Xam* controls → src/data/namespaces.json
 Search index: 6907 types → src/data/search-index.json
 Topics written : 2678
-theme-index.json: 8 newer themes, 45 legacy style folders, 822 XAML files total.
+theme-index.json: 7 newer themes (+1 Themes/ folder(s) that are no theme), 45 legacy style folders, 822 XAML files total; 555 ThemeManager control → file mappings applied.
 Build info → src/data/build-info.json
 ```
 
@@ -97,8 +97,7 @@ Then set `NUGET_FEED_USERNAME` / `NUGET_FEED_PASSWORD` in your environment and r
 | `npm run dev` | Run `src/index.ts` with tsx (needs `src/data/`) |
 | `npm test` | Smoke test: starts `dist/index.js` over stdio and calls every tool against the real data (`scripts/smoke-test.ts`) |
 | `npm run build:dotnet` | `dotnet build` the C# server (`server/`) — copies `src/data` next to the binary, so it needs `src/data/` too |
-| `npm run test:dotnet` | The same smoke test against the C# build (`smoke-test.ts --dotnet`) |
-| `npm run test:parity` | Runs 60+ fixed tool calls against both servers and fails on any difference in instructions, tool descriptions/annotations, or output text (`scripts/parity-test.ts`) |
+| `npm run test:dotnet` | The same smoke test against the C# build (`smoke-test.ts --dotnet`), plus the checks for C#-only behavior (under `IS_DOTNET`) |
 | `npm run pack:dotnet` | `dotnet pack` → `nupkg/Infragistics.Wpf.Mcp.<version>.nupkg`, version from `package.json` (`-- --version X.Y.Z` overrides) |
 | `npm run typecheck` | `tsc --noEmit` for `src/` and `scripts/` — the only check that needs no data |
 | `npm run validate:package` | Pre-publish gate: data-set thresholds, `dist/index.js` shebang, build-info ↔ csproj consistency, and — when `nupkg/` exists — the NuGet package's metadata, `.mcp/server.json` and data counts; `-- --expected-version X.Y.Z` also checks `package.json`, `server.json` and the nupkg version, and requires the nupkg |
@@ -110,7 +109,7 @@ Then set `NUGET_FEED_USERNAME` / `NUGET_FEED_PASSWORD` in your environment and r
 | `npm run docs:update` | Move the three submodules to their latest upstream commit |
 | `npm pack --dry-run` | Show exactly what would be published to npm and how big it is (~12 MB tarball, ~100 MB unpacked, ~10k files); the nupkg from `pack:dotnet` is ~19 MB |
 
-Before opening a PR: `npm run typecheck && npm run build:all && npm test && npm run build:dotnet && npm run test:dotnet && npm run test:parity && npm run pack:dotnet && npm run validate:package`. CI runs the same.
+Before opening a PR: `npm run typecheck && npm run build:all && npm test && npm run build:dotnet && npm run test:dotnet && npm run pack:dotnet && npm run validate:package`. CI runs the same.
 
 The C# server is a second runtime over the same `src/data/`, not a second product: `server/Program.cs` (bootstrap), `server/Data/` (models + loaders), `server/Tools/*.cs` (one class per tool group). Locally it builds as version `0.0.0-dev` (the placeholder in the csproj); `pack:dotnet` and CI override it with `-p:Version` from `package.json` or the release tag.
 
@@ -126,7 +125,7 @@ To bump, either run the **Bump Infragistics data sources** workflow (Actions →
 ```bash
 sed -i -E 's/(<PackageReference [^>]*Version=")[^"]+(")/\126.1.30\2/' nuget/WpfDocs.csproj
 npm run docs:update
-npm run build:all && npm test && npm run build:dotnet && npm run test:parity && npm run validate:package
+npm run build:all && npm test && npm run build:dotnet && npm run test:dotnet && npm run validate:package
 git add nuget/WpfDocs.csproj docs/
 git commit -m "chore(data): bump Infragistics sources (26.1.30)"
 ```
@@ -137,26 +136,19 @@ git commit -m "chore(data): bump Infragistics sources (26.1.30)"
 
 ## Adding or changing a tool
 
-Four TypeScript files, in this order:
+C# only — `src/` is frozen:
 
-1. `src/tools/constants.ts` — `TOOL_DESCRIPTIONS.<name>`; the descriptions cross-reference each other by tool name.
-2. `src/tools/schemas.ts` — zod input schema; `.describe()` text is agent-facing guidance.
-3. `src/tools/handlers.ts` — `create<Name>Handler(deps, log)` returning `async (input) => CallToolResult`. Every return path, including `isError: true`, must call `log(...)`.
-4. `src/index.ts` — `server.registerTool(...)` with `readOnlyHint: true, idempotentHint: true, openWorldHint: false`, plus any new startup-loaded index.
+1. `server/Tools/ToolDescriptions.cs` — the description as a raw string literal; the descriptions cross-reference each other by tool name. Workflow-level guidance goes in `server/ServerInstructions.cs`.
+2. `server/Tools/<Group>Tools.cs` — a `[McpServerTool(Name = "...", ReadOnly = true, Idempotent = true, OpenWorld = false)]` method; `[Description]` on parameters is agent-facing guidance, `[MinLength]/[MaxLength]/[Range]` only describe the schema (the SDK doesn't enforce them — clamp/validate in code), enums go in `server/Tools/Enums.cs`. Every return path, including errors, calls `log.Write(...)`. A new tool class is registered with `.WithTools<T>()` in `server/Program.cs`; a new data file gets a record in `server/Data/Models.cs` (add it to `WpfJsonContext`) and a loader in `server/Data/DataStore.cs`.
+3. A case in `scripts/smoke-test.ts`. The same script also runs against the frozen TS server, so put checks of C#-only behavior (and, for a new tool, the expected tool list) under `IS_DOTNET`.
+4. If the tool reads a new file family, a threshold in `scripts/validate-package.ts`.
 
-Then the C# mirror — the parity test fails until it matches byte-for-byte:
-
-5. `server/Tools/ToolDescriptions.cs` — the same description text as a raw string literal.
-6. `server/Tools/<Group>Tools.cs` — a `[McpServerTool(Name = "...", ReadOnly = true, Idempotent = true, OpenWorld = false)]` method; `[Description]` on parameters is the zod `.describe()` text, `[MinLength]/[MaxLength]/[Range]` are the zod constraints (schema-only — clamp in code like the TS does), enums go in `server/Tools/Enums.cs`. Every return path calls `log.Write(...)`. A new tool class is registered with `.WithTools<T>()` in `server/Program.cs`; a new data file gets a record in `server/Data/Models.cs` (add it to `WpfJsonContext`) and a loader in `server/Data/DataStore.cs`.
-
-Finally add a case to `scripts/smoke-test.ts`, a few calls (including error paths) to `CALLS` in `scripts/parity-test.ts`, and, if the tool reads a new file family, a threshold to `scripts/validate-package.ts`.
-
-Porting gotchas that already bit once: JS `localeCompare` (use `NameComparer`), JS truthiness of `""` for optional strings, and line endings — C# raw string literals keep the source file's newlines, so `server/**/*.cs` is pinned to LF in `.gitattributes`; a CRLF checkout fails the parity test with lines that look identical.
+Gotchas: `server/**/*.cs` is pinned to LF in `.gitattributes` because C# raw string literals keep the source file's newlines, so a CRLF checkout would change the agent-facing text. Some JS behaviors were ported on purpose and are commented at each site (`NameComparer` for JS `localeCompare`, JS truthiness of `""` for optional strings).
 
 Conventions:
 
 - ESM with `module: Node16`: relative imports use `.js` extensions even for `.ts` sources.
-- `ApiEntry`, `DocIndexEntry`/`DocEntry` and `ThemeIndex` are declared three times — in `scripts/*.ts` (producer), `src/lib/types.ts` (Node consumer) and `server/Data/Models.cs` (C# consumer). Scripts intentionally don't import from `src/`; change all three.
+- `ApiEntry`, `DocIndexEntry`/`DocEntry` and `ThemeIndex` are declared three times — in `scripts/*.ts` (producer), `src/lib/types.ts` (Node consumer) and `server/Data/Models.cs` (C# consumer). Scripts intentionally don't import from `src/`. Change the producer and `Models.cs` together; additive fields need no TS change, but a breaking shape change must also update `src/lib/types.ts` (the one exception to "`src/` is frozen"), because CI still runs the TS smoke test against the same data.
 - Any on-demand file read goes through `resolveInside()` in `src/lib/safe-path.ts` (containment check, no character allowlist — generated names contain backticks, spaces and braces).
 - A build step whose output count could legitimately be zero because of a missing upstream must `assertBuildStep(...)`, not warn.
 
@@ -171,7 +163,7 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`fe
    This runs `npm version --no-git-tag-version`, whose `version` hook (`scripts/version.ts`) updates `package.json`, syncs `server.json` (top-level `version` and every `packages[].version`), and prepends the new section to `CHANGELOG.md`. Nothing is committed or tagged. The NuGet package takes its version from the release tag at pack time, so there is no third file to bump.
 2. Review the diff, commit as `chore(release): 1.2.3`, open a PR, merge.
 3. On GitHub, **Releases → Draft a new release**, tag = the **bare version** (`1.2.3`, no `v`) on the merge commit, generate notes, publish. Tick *pre-release* for `-alpha`/`-beta`/`-rc` versions.
-4. The *NuGet publish* workflow (`nuget-publish.yml`) runs on release creation, pushes `Infragistics.Wpf.Mcp` to nuget.org and then lists the version in the MCP Registry. Watch it under Actions.
+4. The *NuGet publish* workflow (`nuget-publish.yml`) runs when the release is published (saving it as a draft first is fine — nothing runs until you publish), pushes `Infragistics.Wpf.Mcp` to nuget.org and then lists the version in the MCP Registry. Watch it under Actions.
 5. Verify what users get, from a clean machine or a throwaway tool path:
    ```bash
    dotnet tool install --tool-path ./tmp-tool Infragistics.Wpf.Mcp --version 1.2.3   # add --prerelease for -alpha/-beta/-rc
@@ -187,8 +179,8 @@ A prerelease version (`-alpha`/`-beta`/`-rc`) is a normal SemVer prerelease on n
 | Workflow | Trigger | Runner | Does |
 |---|---|---|---|
 | `nodejs.yml` — *Node.js CI* | push / PR to `main` | `typecheck`: ubuntu | `npm ci` → `typecheck` (fast feedback, needs no data) |
-| `dotnet-ci.yml` — *.NET CI* | push / PR to `main` | `build-and-test`: windows, Node 24, 30 min timeout | `npm ci` → `typecheck` → `build:all` → `test` → `build:dotnet` → `test:dotnet` → `test:parity` → `pack:dotnet` → `validate:package` → prints nupkg size. A new push to a PR cancels its in-progress run; runs on `main` always finish |
-| `nuget-publish.yml` — *NuGet publish* | GitHub Release created | `build`, `sign`: windows · `publish-nuget`, `publish-mcp-registry`: ubuntu | `build`: same as CI (nupkg stamped with the tag) + `validate:package --expected-version <tag>` → unsigned nupkg artifact. `sign` (environment `nuget-org-publish`): Azure login + one `sign code` call on the `.nupkg`, which Authenticode-signs `wpf-mcp.dll` inside it (selected by `eng/sign-filelist.txt`) and then the package itself → both signatures validated → nupkg artifact. `publish-nuget` (same environment): `NuGet/login` + `dotnet nuget push`. `publish-mcp-registry` (skipped for prereleases): wait for nuget.org to serve the version, `mcp-publisher publish` |
+| `dotnet-ci.yml` — *.NET CI* | push / PR to `main` | `build-and-test`: windows, Node 24, 30 min timeout | `npm ci` → `typecheck` → `build:all` → `test` → `build:dotnet` → `test:dotnet` → `pack:dotnet` → `validate:package` → prints nupkg size. A new push to a PR cancels its in-progress run; runs on `main` always finish |
+| `nuget-publish.yml` — *NuGet publish* | GitHub Release published | `build`, `sign`: windows · `publish-nuget`, `publish-mcp-registry`: ubuntu | `build`: same as CI (nupkg stamped with the tag) + `validate:package --expected-version <tag>` → unsigned nupkg artifact. `sign` (environment `nuget-org-publish`): Azure login + one `sign code` call on the `.nupkg`, which Authenticode-signs `wpf-mcp.dll` inside it (selected by `eng/sign-filelist.txt`) and then the package itself → both signatures validated → nupkg artifact. `publish-nuget` (same environment): `NuGet/login` + `dotnet nuget push`. `publish-mcp-registry` (skipped for prereleases): wait for nuget.org to serve the version, `mcp-publisher publish` |
 | `bump-infragistics.yml` — *Bump Infragistics data sources* | manual | ubuntu | Rewrites csproj versions and/or `docs:update`, opens a PR |
 
 The Windows *build* jobs go through the composite action `.github/actions/build-data`, so CI and the release can't drift. Every third-party action in the workflows is pinned to a full commit SHA, with the release it corresponds to in a trailing comment (`@<sha> # v7.0.1`); to update one, resolve the new release tag to its commit and replace both. It takes the private-feed credentials as inputs, which the workflows pass from these repository secrets (*Settings → Secrets and variables → Actions*):
@@ -212,7 +204,7 @@ It restores two caches:
 
 With both hot, a full CI job is ~3 min (the C# build, tests and pack add about a minute); cold (first run after a bump) 5–8 min.
 
-**Where to look when publish fails:** the `build` job's *Validate package contents* step prints one `OK`/error line per check — a version mismatch means the release tag doesn't match `package.json`/`server.json` (redo the bump), a threshold failure means the data pipeline produced less than expected (read the *Build data and server* step for the 🚨 banner), a `nupkg` error names what is wrong with the NuGet package. A *Parity test* failure prints the first differing line per call — the C# port has drifted from the TypeScript (or vice versa). `publish-nuget` failing at `NuGet/login` with an auth error means the nuget.org trusted-publishing policy doesn't cover this workflow (next section); `publish-mcp-registry` failing with "Registry validation failed for package" means the published README lacks the `mcp-name` marker, which `validate:package` normally catches first.
+**Where to look when publish fails:** the `build` job's *Validate package contents* step prints one `OK`/error line per check — a version mismatch means the release tag doesn't match `package.json`/`server.json` (redo the bump), a threshold failure means the data pipeline produced less than expected (read the *Build data and server* step for the 🚨 banner), a `nupkg` error names what is wrong with the NuGet package. `publish-nuget` failing at `NuGet/login` with an auth error means the nuget.org trusted-publishing policy doesn't cover this workflow (next section); `publish-mcp-registry` failing with "Registry validation failed for package" means the published README lacks the `mcp-name` marker, which `validate:package` normally catches first.
 
 ## First-time and manual publishing
 
@@ -222,7 +214,7 @@ Before the first workflow run, create the three `NUGET_FEED_*` repository secret
 
 Published by the `publish-mcp-registry` job of *NuGet publish*, after `publish-nuget` and only once nuget.org serves the version (the job waits for indexing). Never for prereleases — the registry has no dist-tag equivalent, so publishing a beta there would make it the current version; the job is skipped for any version containing `-`.
 
-The registry hosts metadata only. The namespace `io.github.Infragistics-Developer-Tools/*` is claimed automatically when `mcp-publisher login github-oidc` runs from this repository's Actions — nothing to configure. It verifies NuGet ownership by finding `mcp-name: io.github.Infragistics-Developer-Tools/wpf-mcp` in the package README (an HTML comment at the top of `server/README.md`); `validate:package` fails the build if the packed README lacks it. The nupkg also carries `server.json` as `.mcp/server.json`, which nuget.org and MCP clients read for configuration. The workflow downloads a pinned `mcp-publisher` (`MCP_PUBLISHER_VERSION` in `nuget-publish.yml`); `mcp-publisher validate` checks `server.json` against the live registry without publishing. By hand: `mcp-publisher login github && mcp-publisher publish` from the release commit (single binary from the [registry releases](https://github.com/modelcontextprotocol/registry/releases)).
+The registry hosts metadata only. The namespace `io.github.Infragistics-Developer-Tools/*` is claimed automatically when `mcp-publisher login github-oidc` runs from this repository's Actions — nothing to configure. It verifies NuGet ownership by finding `mcp-name: io.github.Infragistics-Developer-Tools/wpf-mcp` in the package README (an HTML comment at the top of `server/README.md`); `validate:package` fails the build if the packed README lacks it. The nupkg also carries `server.json` as `.mcp/server.json`, which nuget.org and MCP clients read for configuration. The workflow downloads a pinned `mcp-publisher`, currently v1.8.1 (`MCP_PUBLISHER_VERSION` in `nuget-publish.yml`), and checks it against `MCP_PUBLISHER_SHA256` before running it; to bump, set both from the new release's `registry_<version>_checksums.txt` (the `mcp-publisher_linux_amd64.tar.gz` line); `mcp-publisher validate` checks `server.json` against the live registry without publishing. By hand: `mcp-publisher login github && mcp-publisher publish` from the release commit (single binary from the [registry releases](https://github.com/modelcontextprotocol/registry/releases)).
 
 ### npm (retired)
 
@@ -250,30 +242,56 @@ A version can never be pushed twice, so a rerun of the workflow for a tag that a
 
 ### Why reflection at build time
 
-Infragistics WPF NuGet packages ship two files per assembly: `InfragisticsWPF.*.dll` and the compiler-generated `InfragisticsWPF.*.xml` doc comments. The XML gives summaries but no property types, enum values or inheritance; only reflection on the DLL does. So `scripts/type-extractor/Program.cs` loads every Infragistics DLL into one `AssemblyLoadContext`, walks all public types and writes `nuget/type-info.json` — a flat map of `"Type.Prop" → {typeName, isNullable, isEnum, enumValues}` plus `"Type.__baseType" → "Base"`. `scripts/build-api.ts` then merges that with the XML docs. No reflection happens at query time; a tool call is a JSON file read.
+Infragistics WPF NuGet packages ship two files per assembly: `InfragisticsWPF.*.dll` and the compiler-generated `InfragisticsWPF.*.xml` doc comments. The XML gives summaries but no property types, enum values or inheritance; only reflection on the DLL does. So `scripts/type-extractor/Program.cs` loads every Infragistics DLL into one `AssemblyLoadContext`, walks all public types and writes `nuget/type-info.json` — a flat map of `"Assembly|Namespace.Type.Prop" → {typeName, isNullable, isEnum, enumValues}` (static and protected properties and static `ResourceKey`/`RoutedCommand` fields included, the latter with `isField`), plus `__baseTypes`, `__xaml`, `__nonPublicTypes` and `__nonPublicMembers`, all keyed by assembly + full name so types sharing a short name can't overwrite each other (with short-name keys, the XGrid `FilterOperand.Icon`, a `String`, replaced the XamGrid one's `DataTemplate` on 49 pages). `scripts/build-api.ts` then merges that with the XML docs.
+
+The xmlns of each type is resolved here, not guessed: the extractor reads every DLL's `XmlnsDefinition`/`XmlnsPrefix` attributes and asks System.Xaml's `XamlSchemaContext` — the rules the WPF markup compiler applies — which xmlns resolves to exactly that type. When a namespace has several (e.g. `http://infragistics.com/Themes` and the catch-all `http://schemas.infragistics.com/xaml/wpf`), the one mapping the fewest namespaces wins. Types no Infragistics xmlns reaches get `clr-namespace:Ns;assembly=Asm`, with a unique `ig…` prefix; nested types get `xamlName` `Outer+Inner`. So do types with a rival under the xmlns: another top-level type of the same name, public or internal, in a namespace and DLL that xmlns also covers. `XamlSchemaContext` ignores internal types and settles same-named public ones by assembly order, but the WPF markup compiler does neither: XamDataTree's public `NodesManager` under `http://schemas.infragistics.com/xaml` failed with MC3064 because XamDiagram has an internal `NodesManager` under the same xmlns, and the RichTextEditor/SyntaxEditor twins depend on which package the app references (13 indexed types). A DLL whose Infragistics references aren't in the set (the .NET Framework-only Exchange connector) is left out of resolution, because `XamlSchemaContext` throws on every lookup otherwise. Measured on 26.1.21: all 5,180 public non-generic indexed types resolve to the exact type, and a WPF build that uses every one of them with its generated xmlns compiles with no errors (the previous per-assembly table got 1,984 of them wrong). No reflection happens at query time; a tool call is a JSON file read.
 
 ### build-api.ts specifics
 
 - XML files are parsed with split-based chunking, not a regex over the whole multi-MB file, and members are bucketed into a `Map<typeFQN, members>` (O(n)).
-- `enrichWithInheritance()` walks `__baseType` chains (cycle-guarded) and copies parent members onto children tagged with `declaredOn`. This is why `XamDataGrid` shows dozens of properties although it declares few directly.
+- `type-info.json`'s per-member entries are read with regexes, so the captured strings are JSON-unescaped (System.Text.Json writes `` ` `` and `<` as ```/`<`); without that, generic names never matched and `Action<ToolCommand>` reached agents as `Action<ToolCommand>`.
+- `enrichWithInheritance()` walks `__baseTypes` chains by assembly + full name (cycle-guarded) and copies parent members onto children tagged with `declaredOn`. It looks each base up by full name among every parsed type, not just the pages, so a same-named type (chart `Axis` vs Excel `Axis`) can't leak members in, and a base that lost its short name still passes its members on (XamGrid's `Cell`, whose 11 subclasses had no members from it; 29 types in all). Generic bases (`DataPresenterResourceSet`1`, which holds the theme classes' static styles) are linked through their definition. This is why `XamDataGrid` shows dozens of properties although it declares few directly.
+- Static `ResourceKey`/`RoutedCommand` fields (`F:` entries marked `isField` by the extractor — brush keys, commands) are listed with the properties; other fields (`DependencyProperty` identifiers) are not.
+- Enum values are not members: the extractor writes every enum's values in declaration order with their numbers and `[Flags]` (`__enums`), and the enum's page gets them as `values` (summaries from the XML's `F:` entries; hidden values left out, `[Obsolete]` ones kept with their message) plus `isFlags`. On 26.1.21 that is 7,260 values on 894 enum pages (48 `[Flags]`), which used to say "No members defined directly on this type".
+- Protected and protected internal properties and events look public in the XML docs. The extractor records their types like public ones and flags them `protected` in `__members`; the pages mark them `isProtected` and the server shows `_(protected)_` (methods and indexers say `protected` in their signature). On 26.1.21: 1,575 declared protected properties and 3 events, 10,266 entries with inherited copies (`XamGrid.CurrentEditCell`, a CS0122 from outside the grid).
 - Types matching `EXCLUDE_SUFFIXES` / `EXCLUDE_CONTAINS` / `EXCLUDE_PACKAGES` are dropped, as are members whose summary is literally `internal`.
-- When two types share a short name, the one documenting more members wins the file name; the others are listed in its `alternates`.
-- `ASSEMBLY_XMLNS` maps assembly → xmlns URI/prefix; unlisted assemblies get `http://schemas.infragistics.com/xaml` / `ig`. `namespaces.json` contains only `Xam*`-prefixed types.
+- Non-public types are dropped too. The XML docs also document internal and private nested classes (`ActivePaneManager`, `XamFunnelController`, …) that no app can use — on 26.1.21 they were 1,653 of the 6,907 pages, and search ranked some first ("active pane" → `ActivePaneManager`). The extractor lists the types reflection positively sees as non-public (`__nonPublicTypes`; a type it can't load is never listed, so a load failure can't hide public API), and `build-api.ts` skips them before short-name collisions are resolved, so 89 names that an internal class used to win now document the public class (`DashboardTileGroupDescription`). No public type inherits from a non-public one (C# forbids it), so no inherited members are lost.
+- Non-public members of public types are dropped the same way. The extractor lists the member names that reflection sees only as internal, private or private protected on that type (`__nonPublicMembers`; a name with any public or protected overload stays, and nested public types are covered), and explicit interface implementations are recognized by the `#` in their doc name (`System#Collections#IList#Add`). On 26.1.21 that is 2,171 documented members, 9,006 entries across the pages once inherited copies count (`ValueEditor.InternalIsInitialized` on `ValueEditor` and its 13 subclasses, the `XamDockManager.FlyoutOpening` event). Checked by reflection against the DLLs, no internal or private member is left on any page; the check can't load `ExchangeScheduleDataConnector`, whose DLL is .NET Framework-only.
+- When two types share a short name, the one documenting more members wins the file name; the others are listed in its `alternates`. The count is taken before non-public members are dropped: with the smaller count, `Cell`, `FieldChooser` and `RecordFilterCollection` would switch from the DataPresenter types to the XamGrid / XamPivotGrid / DataManager ones.
+- Each type that lost its name gets a page of its own in `api/alternates/`, built and enriched like the others, which `get_wpf_api_reference` opens by full name: before, only the winner could be opened, so an agent on XamDataGrid got XamGrid's `SelectionType` (`None`, `Single`, `Multiple`) and one that wanted the newer `Infragistics.Controls.Editors.XamComboEditor` got "not found" for its full name. The file name is the lookup: the full name, plus `, Assembly` when two assemblies have the same full name (`Infragistics.Controls.Editors.Caret` is in both the XamRichTextEditor and the XamSyntaxEditor assembly). The server finds it through the short name's page, whose `alternates` list every other type of the name with its lookup, so a short-name lookup reads `api/` as before. Every page of a shared name shows the others with the call that opens each and what tells them apart (member or value count after inheritance, NuGet package, xmlns, summary). One case is not another type: Infragistics.WPF.Spreadsheet.Charts.Trial ships the XML docs of the XamSpreadsheet assembly next to its own ChartAdapter DLL, so 87 types are listed twice with the same assembly and full name; their page notes the second package (`sameType`) instead. On 26.1.21, of 237 shared names, 150 belong to different types (185 alternate pages) and 87 are only these twins (`sameType` notes). The alternates are also in `search-index.json`, after the other entries so ties keep their order, with `f` set to their lookup (and the winner's full name on its entry); only the short name is matched, as for every entry, since namespace words ("Editors") would rank all of them up. That adds 1.7% to the index and changes the results of 3 of the 51 queries in the coverage-run transcripts, each time by bringing in the newer XamComboEditor those agents were searching for.
+- `xamlNamespace`/`defaultPrefix` (and `xamlName` for nested types) come from the extractor's `__xaml`; types it has no entry for (open generics, non-public types, DLLs left out of XAML resolution) fall back to `clr-namespace:` syntax, and the build logs how many. `namespaces.json` contains only `Xam*`-prefixed types.
+
+### `get_wpf_api_reference` size guard
+
+Because inherited members are copied onto every subclass, a few hundred types (mostly charts and annotation layers) rendered to 25–72K characters, and clients like Claude Code save results that large to a file instead of returning them inline. The C# `get_wpf_api_reference` therefore compacts any response over `MaxApiReferenceChars` (25,000, in `ComponentTools.cs`), taking the first of these levels whose output, note included, fits:
+
+1. Events and methods are listed by name only; properties keep full detail. Properties go last because they are what XAML needs, and on the grids nearly all of them are inherited (`XamDataGrid`: 1 of 69 is its own), so compacting inherited members first would hide exactly those. Skipped when the response has no properties (`kind: "events"`/`"methods"`).
+2. Inherited members are listed by name only, one line per "inherited from" section (chosen over name + type when the guard was added: at a 25K threshold name-only gave `XamCategoryChart` 19.8K and left 8 types over the limit, while name + type gave 26.2K and left 12).
+3. All members are listed by name only (9 types, among them `Series` and `XamDomainChart`, which declare 401 and 345 members themselves, and the four `…BrushKeys` classes).
+
+Before it moves on to the next level, the guard tries the current one (full detail included) again with its protected properties and events listed by name only, in one `- protected: …` line per section: only a subclass can use them, and since they carry their type and the `_(protected)_` marker, the `kind: "properties"` responses of 21 types would otherwise go over the limit (25.2K–27.7K; `GeographicHighDensityScatterSeries`: 25.3K in full, 23.0K with them by name) and lose the detail of every inherited property. Protected methods stay out of this retry: a method's full line is its signature, which says `protected` itself. In a list of names, protected members come last, after `protected:`, so they don't pass for public ones: properties and events by their flag, and a method name when every overload listed in that section is protected (one with a public overload stays with the public names, overload count and all). On 26.1.21, across the default and `kind` responses, that is 40,340 of the 67,140 method names in compacted lists (XamDataChart's `SeriesViewer` methods: 25 of 36), and 290 stay public for a public overload; it costs up to 66 characters per response and moves no response to another level.
+
+Section headings always stay, so every member name and its declaring type remain visible. A compacted response says so and points to the optional `member` parameter, a case-insensitive name substring that returns only the matching members, inherited ones included, in full detail. The guard applies to `member`-filtered responses as well, so a very broad filter can't bypass it. Measured over all 5,186 pages of the Infragistics 26.1.21 data (re-measure after a data bump): with the default `kind`, the largest full response is 116,896 chars (`RibbonBrushKeys`, whose keys are listed as static fields) and the largest after the guard 24,976 (`UnboundField`); p99 67,799 → 19,279. 198 types are compacted (29 at level 1, among them `XamDataGrid` and `XamTreeGrid` at 17.7K with every property in full, and `XamGrid` at 15.7K; 160 at level 2, among them the charts; 9 at level 3), and the 2 enums too long to list in full (`UTMZone`, 1,197 values, and `SpreadsheetCommandType`) list their values by name; all others render in full (the largest, `StackedFragmentSeries`, 24.5K). With `kind: "properties"`, 21 types (20 chart series and `SeriesViewer`, the charts' base class) fit by listing their protected properties by name, 136 types are compacted at level 2 and 5 at level 3.
+
+### `get_wpf_theme_resource` paging
+
+Theme files used to be cut at 24,000 characters, and 436 of the 822 (26.1.21) are larger — up to 659K (`RibbonGeneric.xaml`) — so agents fetched them from GitHub instead. Now files up to 24,000 characters come back whole (byte-identical to before); larger ones return a contents overview (pages and the `x:Key`/`TargetType` of the entries starting on each; for the 14 files with 700+ entries just the first and last per page). `page: n` returns page n of 23,000 characters of XAML, and `find: "<text>"` returns the top-level entries whose `x:Key`, `TargetType` or element name contains it, in full, wrapped in the file's own root element (paged the same way when large). `server/Tools/XamlPages.cs` splits a file at its top-level elements (with their leading comments and indentation) using `XmlTextReader` with `Namespaces = false` (three DataPresenter files use an undeclared prefix); an element bigger than a page continues on the next at a line break, and the 76 comment-only dictionaries are paged by line. Verified over all files: every page fits in 25K, the pages concatenate to the exact file (2,674 pages), and `find` results — single- and multi-page — compile as WPF XAML.
 
 ### Two runtimes, one data set
 
-`src/` (TypeScript, not published) and `server/` (C#, published to NuGet) implement the same nine tools over the same generated `src/data/`. Neither is derived from the other — they are kept identical by `scripts/parity-test.ts`, which CI runs on every push. The C# server uses the official `ModelContextProtocol` SDK: tools are `[McpServerTool]` methods whose parameters become the input schema (DataAnnotations → JSON Schema constraints), models are records with a source-generated `JsonSerializerContext`, data files are `Content` items copied next to the binary (`Pack="false"`, so they travel inside the tool's `tools/net10.0/any/data/` folder rather than as NuGet content files). The nupkg also carries `PackageType` `McpServer` (nuget.org renders the MCP install snippet) and `.mcp/server.json`.
+`src/` (TypeScript, not published, frozen) and `server/` (C#, published to NuGet) serve the same nine tools over the same generated `src/data/`. The C# server started as a byte-for-byte port, but the two now diverge where C# has moved on (e.g. the size guard above), and there is no parity test. The C# server uses the official `ModelContextProtocol` SDK: tools are `[McpServerTool]` methods whose parameters become the input schema (DataAnnotations → JSON Schema constraints), models are records with a source-generated `JsonSerializerContext`, data files are `Content` items copied next to the binary (`Pack="false"`, so they travel inside the tool's `tools/net10.0/any/data/` folder rather than as NuGet content files). The nupkg also carries `PackageType` `McpServer` (nuget.org renders the MCP install snippet) and `.mcp/server.json`.
 
 ### Runtime data layout
 
 | File | Size | Loaded | Purpose |
 |---|---|---|---|
-| `dist/data/namespaces.json` | ~50 KB | at startup | 191 Xam* control registry |
-| `dist/data/search-index.json` | ~5 MB | at startup | compact index (`n,s,a,p,m` keys): name, summary, member names |
+| `dist/data/namespaces.json` | ~50 KB | at startup | 183 Xam* control registry |
+| `dist/data/search-index.json` | ~5 MB | at startup | compact index (`n,s,a,p,m` keys): name, summary, member names; `f`: full name of a type whose name others share |
 | `dist/data/docs-index.json` | ~1 MB | at startup | topic slugs, titles, control names, summaries |
-| `dist/data/theme-index.json` | small | at startup | theme/style files with parsed `targetTypes` |
+| `dist/data/theme-index.json` | small | at startup | theme/style files with their `targetTypes` (parsed `TargetType=`, plus the controls each ThemeManager theme maps to the file) |
 | `dist/data/build-info.json` | tiny | at startup | what the data was built from; printed to stderr |
 | `dist/data/api/{Type}.json` | 5–15 KB each | on demand | full member details |
+| `dist/data/api/alternates/{Full.Name}.json` | same | on demand | the other types of a shared short name, opened by full name |
 | `dist/data/docs/{slug}.json` | varies | on demand | full topic text + XAML snippets |
 | `dist/data/theme-resources/**/*.xaml` | varies | on demand | raw theme resource dictionaries |
 

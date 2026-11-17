@@ -8,6 +8,9 @@ namespace Infragistics.Wpf.Mcp.Tools;
 public sealed class ToolLog
 {
     private readonly bool _enabled;
+    // Tool calls run concurrently and File.AppendAllText doesn't share the file with another
+    // writer, so unserialized appends collide and the entry is lost. Covers this process only.
+    private readonly Lock _gate = new();
     public string Path { get; }
 
     public ToolLog(bool enabled)
@@ -24,8 +27,8 @@ public sealed class ToolLog
         var preview = output.Length > 400 ? $"{output[..400]}… ({output.Length} chars)" : output;
         try
         {
-            File.AppendAllText(Path,
-                $"[{DateTime.UtcNow:yyyy-MM-dd'T'HH:mm:ss.fff'Z'}] {tool} ({timer.ElapsedMilliseconds}ms)\n  IN:  {JsonSerializer.Serialize(input)}\n  OUT: {preview}\n\n");
+            var entry = $"[{DateTime.UtcNow:yyyy-MM-dd'T'HH:mm:ss.fff'Z'}] {tool} ({timer.ElapsedMilliseconds}ms)\n  IN:  {JsonSerializer.Serialize(input)}\n  OUT: {preview}\n\n";
+            lock (_gate) File.AppendAllText(Path, entry);
         }
         catch
         {

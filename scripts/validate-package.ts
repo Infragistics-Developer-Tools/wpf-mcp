@@ -31,7 +31,7 @@ const TOOL_DIR = 'tools/net10.0/any/';
 const MIN_COMPONENTS      = 150;
 const MIN_SEARCH_ENTRIES  = 5000;
 const MIN_SEARCH_BYTES    = 2 * 1024 * 1024;
-const MIN_API_FILES       = 6000;
+const MIN_API_FILES       = 5000;   // ~5,190 public type names + ~185 api/alternates/ pages on 26.1.21 (internal classes and ones hidden from IntelliSense are not indexed)
 const MIN_DOC_TOPICS      = 2000;
 const MIN_NEWER_THEMES    = 5;
 const MIN_LEGACY_FOLDERS  = 20;
@@ -148,6 +148,9 @@ if (components) {
     errors.push(`namespaces.json has ${components.length} components < ${MIN_COMPONENTS}`);
   } else if (components.some(c => !c.component || !c.xamlNamespace || !c.nugetPackage)) {
     errors.push('namespaces.json has entries missing component/xamlNamespace/nugetPackage');
+  } else if (components.some(c => c.nugetPackage === c.nugetPackage.toLowerCase())) {
+    // Lowercase means the ID came from the nuget/packages folder name, not the .nuspec <id>.
+    errors.push('namespaces.json has lowercase nugetPackage IDs (e.g. "infragistics.wpf.datagrids.trial") — build-api.ts must take the canonical casing from the .nuspec');
   } else {
     ok('data', String(components.length), 'components in namespaces.json');
   }

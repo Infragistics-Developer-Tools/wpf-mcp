@@ -1,8 +1,8 @@
 # wpf-mcp
 
-MCP server for **Infragistics Ultimate UI for WPF** — component registry, XAML namespace lookup, full API reference with property types and enum values, keyword search across 6,900+ types, and named-theme setup with palette re-coloring.
+MCP server for **Infragistics Ultimate UI for WPF** — component registry, XAML namespace lookup, full API reference with property types, enum values and method signatures, keyword search across 5,100+ public types, and named-theme setup with verified recolor steps.
 
-Distributed as a NuGet `dotnet tool`, [`Infragistics.Wpf.Mcp`](https://www.nuget.org/packages/Infragistics.Wpf.Mcp), and listed in the [MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.Infragistics-Developer-Tools/wpf-mcp`.
+Distributed as a NuGet `dotnet tool`, [`Infragistics.Wpf.Mcp`](https://www.nuget.org/packages/Infragistics.Wpf.Mcp) — currently in **beta** (`0.1.0-beta.1`). From the first stable release it will also be listed in the [MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.Infragistics-Developer-Tools/wpf-mcp`.
 
 ## Tools
 
@@ -10,40 +10,42 @@ All tools are read-only (`readOnlyHint: true`, `openWorldHint: false`) — none 
 
 | Tool | Description |
 |---|---|
-| `list_wpf_components` | List all 191 Xam* controls with canonical XAML namespace URIs, NuGet packages, and descriptions. Always call this first before writing XAML. |
+| `list_wpf_components` | List all 183 Xam* controls with canonical XAML namespace URIs, NuGet packages, and descriptions. Always call this first before writing XAML. |
 | `get_wpf_project_scaffold` | Generate ready-to-run `dotnet new` + `dotnet add package` + `dotnet restore` commands and xmlns declarations for a new WPF project. Pass component names resolved via `list_wpf_components`. |
-| `search_wpf_api` | Search across all 6,900+ types by keyword — matches type names, summaries, and member names. Use when you don't know the exact type name. |
-| `get_wpf_api_reference` | Full API reference for any type: properties with types and enum values, events, methods, and inherited members grouped by base class. |
+| `search_wpf_api` | Search across all 5,100+ public types by keyword — matches type names, summaries, and member names. Use when you don't know the exact type name. |
+| `get_wpf_api_reference` | Full API reference for any type: properties with types and enum values, constructors and methods with the C# signature of every overload, events, and inherited members grouped by base class. Obsolete members are left out; looking one up returns its replacement. Large types are compacted to stay under ~25K characters (events and methods first, then inherited members, are listed by name only); the optional `member` filter (case-insensitive name substring, e.g. `"YAxis"`) returns full details, including parameter descriptions, for just the members you need. |
 | `setup_wpf_theme` | List available named themes and the raw XAML files backing them, covering both theming mechanisms (legacy embedded-BAML `Theme="..."` and newer `ThemeManager`). Returns ready-to-paste apply steps. Call first for any theming task. |
-| `get_wpf_theme_resource` | Retrieve the full raw XAML of one theme/style resource-dictionary file (real `Style`/`ControlTemplate`/brush definitions) to copy and override. Use the exact `path` from `setup_wpf_theme`. |
-| `get_wpf_theme_palette` | Return a newer-family (ThemeManager) theme's centralized color/brush palette — exact resource keys, values, and a ready-to-merge override skeleton — for re-coloring a theme without creating a new one. |
-| `search_wpf_docs` | Search 2,600+ how-to documentation topics by keyword and/or control name — layouts, styling, data binding, filtering/sorting/grouping, exporting, performance, known issues, etc. |
-| `get_wpf_doc` | Full text (including XAML samples) of one documentation topic by slug. Use the `slug` from a `search_wpf_docs` result. |
+| `get_wpf_theme_resource` | Retrieve the full raw XAML of one theme/style resource-dictionary file (real `Style`/`ControlTemplate`/brush definitions) to copy and override. Large files come in pages that concatenate to the exact file; `find` returns single styles, templates or brushes in full. Use the exact `path` from `setup_wpf_theme`. |
+| `get_wpf_theme_palette` | Return a newer-family (ThemeManager) theme's color/brush palette — exact resource keys and values — plus verified steps to recolor that theme (control-level overrides or an extended theme) without creating a new one. |
+| `search_wpf_docs` | Search 2,300+ how-to documentation topics by keyword and/or control name — layouts, styling, data binding, filtering/sorting/grouping, exporting, performance, known issues, etc. A control name also finds the topics that cover it under a family (e.g. `XamMaskedInput` under xamInputs). |
+| `get_wpf_doc` | Full text of one documentation topic by slug, with its XAML, C# and VB samples; topics over ~24K characters come in pages. Use the `slug` from a `search_wpf_docs` result. |
 
 ## Installation
 
-Requires the **.NET 10 runtime** or newer (Windows, macOS or Linux); nothing else. All Infragistics data ships inside the package and nothing is downloaded at runtime.
+Requires the **.NET 10 SDK** or newer (Windows, macOS or Linux) — `dotnet tool install` and `dnx` are SDK commands, so the .NET 10 runtime alone is not enough. All Infragistics data ships inside the package and nothing is downloaded at runtime.
+
+> **Beta:** the package is a prerelease, so every command below needs `--prerelease` or an exact `@0.1.0-beta.1` version — without one, NuGet reports the package as "not found".
 
 **Option A: global install** (gives you a `wpf-mcp` command on `PATH`)
 
 ```bash
-dotnet tool install -g Infragistics.Wpf.Mcp
+dotnet tool install -g Infragistics.Wpf.Mcp --prerelease
 ```
 
-Update with `dotnet tool update -g Infragistics.Wpf.Mcp`, remove with `dotnet tool uninstall -g Infragistics.Wpf.Mcp`.
+Update with `dotnet tool update -g Infragistics.Wpf.Mcp --prerelease`, remove with `dotnet tool uninstall -g Infragistics.Wpf.Mcp`.
 
-**Option B: run on demand with `dnx`** (needs the .NET 10 **SDK**; downloads and caches the package on first use, nothing to install or update by hand)
+**Option B: run on demand with `dnx`** (downloads and caches the package on first use, nothing to install or update by hand)
 
 ```bash
-dnx Infragistics.Wpf.Mcp --yes
-# or pin an exact version:
-dnx Infragistics.Wpf.Mcp@X.Y.Z --yes
+dnx Infragistics.Wpf.Mcp@0.1.0-beta.1 --yes
+# or always the newest prerelease:
+dnx Infragistics.Wpf.Mcp --prerelease --yes
 ```
 
 **Check that it starts.** Run `wpf-mcp` (or the `dnx` command above) in a terminal. It prints a line like this to stderr and then waits for an MCP client on stdin:
 
 ```
-Infragistics WPF MCP server X.Y.Z ready (data: Infragistics 26.1.21, built YYYY-MM-DD)
+Infragistics WPF MCP server 0.1.0-beta.1 ready (data: Infragistics 26.1.54, built <date>)
 ```
 
 Press `Ctrl+C` to stop it. To try the tools without an AI client, open it in the MCP Inspector: `npx @modelcontextprotocol/inspector wpf-mcp`.
@@ -88,27 +90,37 @@ Press `Ctrl+C` to stop it. To try the tools without an AI client, open it in the
 }
 ```
 
-**Claude Code** — from a terminal:
+**Claude Code** (CLI or VS Code extension) — add `.mcp.json` to your project root:
 
-```bash
-claude mcp add infragistics-wpf -- wpf-mcp
+```json
+{
+  "mcpServers": {
+    "infragistics-wpf": {
+      "command": "wpf-mcp"
+    }
+  }
+}
 ```
 
-To use `dnx` instead of a global install, set `"command": "dnx"` and `"args": ["Infragistics.Wpf.Mcp", "--yes"]` (Claude Code: `claude mcp add infragistics-wpf -- dnx Infragistics.Wpf.Mcp --yes`). Add `"--debug"` to `args` for any client to log every tool call/response to `wpf-mcp.log` in your system temp folder (override with the `WPF_MCP_LOG` environment variable) — see [Troubleshooting](#troubleshooting).
+Approve the server when Claude Code asks, then type `/mcp` in the chat to check that `infragistics-wpf` is connected. If the `claude` command is on your `PATH` (the VS Code extension doesn't add it), you can run `claude mcp add infragistics-wpf -- wpf-mcp` instead.
+
+To use `dnx` instead of a global install, set `"command": "dnx"` and `"args": ["Infragistics.Wpf.Mcp@0.1.0-beta.1", "--yes"]` (Claude Code: `claude mcp add infragistics-wpf -- dnx Infragistics.Wpf.Mcp@0.1.0-beta.1 --yes`). Add `"--debug"` to `args` for any client to log every tool call/response to `wpf-mcp.log` in your system temp folder (override with the `WPF_MCP_LOG` environment variable) — see [Troubleshooting](#troubleshooting).
 
 To run from a source checkout instead, build it first (see [DEVELOPMENT.md](DEVELOPMENT.md)) and point `command`/`args` at `dotnet` and `path/to/wpf-mcp/server/bin/Debug/net10.0/wpf-mcp.dll`.
 
 ## Troubleshooting
 
-- **Which Infragistics version is the data from?** The server prints it to stderr on startup: `Infragistics WPF MCP server X.Y.Z ready (data: Infragistics 26.1.21, built YYYY-MM-DD)`. Every release regenerates the data from the version pinned in [`nuget/WpfDocs.csproj`](nuget/WpfDocs.csproj).
-- **Run the server with `--debug`** (add it to your MCP client config's `args`, see above) to log every tool call's input/output/timing to `wpf-mcp.log` in your system temp folder — useful for reproducing an agent's exact tool-calling sequence after the fact. The exact path is printed to stderr on startup, and can be overridden with the `WPF_MCP_LOG` environment variable.
+- **`infragistics.wpf.mcp is not found in NuGet feeds`** — the command is missing `--prerelease` (or an exact `@0.1.0-beta.1` version); see [Installation](#installation).
+- **`Settings file 'DotnetToolSettings.xml' was not found in the package`** — the active .NET SDK is older than 10 (check `dotnet --version`; a `global.json` in the current folder can pin an older one). Install the .NET 10 SDK.
+- **Which Infragistics version is the data from?** The server prints it to stderr on startup: `Infragistics WPF MCP server 0.1.0-beta.1 ready (data: Infragistics 26.1.54, built <date>)`. Every release regenerates the data from the version pinned in [`nuget/WpfDocs.csproj`](nuget/WpfDocs.csproj).
+- **Run the server with `--debug`** (add it to your MCP client config's `args`, see above) to log every tool call's input/output/timing to `wpf-mcp.log` in your system temp folder — useful for reproducing an agent's exact tool-calling sequence after the fact. The exact path is printed to stderr on startup, and can be overridden with the `WPF_MCP_LOG` environment variable. `--debug` also turns on the MCP SDK's per-request logging on stderr, which is otherwise limited to warnings and errors.
 - **`wpf-mcp` is not found** after `dotnet tool install -g` — the global tools folder (`%USERPROFILE%\.dotnet\tools` on Windows, `~/.dotnet/tools` elsewhere) is not on the `PATH` of the process that launches the client. Restart the client, or use the full path as `command`.
 - **A tool call succeeded but the answer looks wrong or a control seems missing** — this is usually stale/outdated data from Infragistics' own NuGet package (summaries, base types) rather than a bug in this server. Cross-check against the pinned version above before assuming the MCP itself is at fault.
 - **A tool returns "no topics found" / "no themes found" for everything** on a source build — the data pipeline didn't complete. Re-run `npm run build:all` and read the output; it either reports real counts or aborts with a 🚨 banner saying exactly what's missing. Published packages are validated against these counts before release, so this can't happen with a NuGet install.
 
 ## Contributing
 
-Build pipeline, data updates, adding tools, versioning and the publish process are documented in [DEVELOPMENT.md](https://github.com/Infragistics-Developer-Tools/wpf-mcp/blob/main/DEVELOPMENT.md). The published C# server lives in `server/`. A TypeScript implementation in `src/` reads the same generated data and is kept in sync by a parity test, but it is not published.
+Build pipeline, data updates, adding tools, versioning and the publish process are documented in [DEVELOPMENT.md](https://github.com/Infragistics-Developer-Tools/wpf-mcp/blob/main/DEVELOPMENT.md). The published C# server lives in `server/`. A TypeScript implementation in `src/` reads the same generated data; it is frozen and not published, and newer behavior (such as the `get_wpf_api_reference` size guard) exists only in the C# server.
 
 ## License
 

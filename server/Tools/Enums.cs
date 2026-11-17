@@ -2,8 +2,8 @@ using System.Text.Json.Serialization;
 
 namespace Infragistics.Wpf.Mcp.Tools;
 
-// Enum inputs mirror the z.enum() lists in src/tools/schemas.ts; member names are the
-// wire values (they double as the schema `enum` list).
+// Enum inputs (originally ported from the z.enum() lists in src/tools/schemas.ts); member names
+// are the wire values (they double as the schema `enum` list).
 
 [JsonConverter(typeof(JsonStringEnumConverter<MemberKind>))]
 public enum MemberKind { all, properties, methods, events }
